@@ -138,6 +138,7 @@ import { RateLimitGuard } from './rate-limit/rate-limit.guard';
     AnalyticsModule,
     UserModule,
     AuthModule,
+    AccountMergeModule,
     ConfessionModule,
     ConfessionDraftModule,
     SearchDiscoveryModule,

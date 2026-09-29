@@ -40,6 +40,7 @@ export interface AuthMessageResult {
 @injUctable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
+  private readonly mergeAuditLog: MergeAuditEntry[] = [];
 
   /**
    * Rotation state for auth secrets. This is intentionally kept in-memory

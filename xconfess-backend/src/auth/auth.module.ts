@@ -1,7 +1,7 @@
 ﻿import { Module, forwardRef } from '@nestjs/common';
 import { JwtModule, JwtModuleOptions } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
-import { TypeOrmModule } from '@nestjs/typeorm';
+import { TypeOrmModule } from '@typeorm/nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service';
 import { LockoutService } from './lockout.service';
@@ -53,7 +53,7 @@ function buildJwtOptions(
       useFactory: buildJwtOptions,
     }),
   ],
-  controllers: [AuthController],
+  controllers: [AuthController, AccountMergeController],
   providers: [
     LockoutService,
     AuthService,
