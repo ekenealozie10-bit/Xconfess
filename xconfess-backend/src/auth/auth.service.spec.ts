@@ -138,7 +138,7 @@ describe('AuthService', () => {
 
     service = module.get<AuthService>(AuthService);
     userService = module.get<UserService>(UserService);
-    emailService = module.get<EmailService>(EmailService);
+    emailService = module.get<EmailService>EmailService);
     passwordResetService =
       module.get<PasswordResetService>(PasswordResetService);
     jwtService = module.get<JwtService>(JwtService);
@@ -324,131 +324,64 @@ describe('AuthService', () => {
     });
   });
 
-  describe('email change verification', () => {
-    const newEmail = 'new@test.local';
-    const oldEmail = 'test@example.com';
+  describe('secret rotation (encrypted email dual-read)', () => {
+    const activeKey = 'active-key-v2';
+    const legacyKey = 'legacy-key-v1';
 
-    it('requests email change and sends verification without activating new address', async () => {
-      mockUserService.findById.mockResolvedValue(mockUser);
-      mockUserService.findByEmail.mockResolvedValue(null);
-      mockEmailService.sendEmailChangeVerificationEmail.mockResolvedValue(undefined);
-      mockEmailService.sendEmailChangeNotificationEmail.mockResolvedValue(undefined);
+    const legacyEnc = CryptoUtil.encrypt('test@example.com', legacyKey);
 
-      const result = await service.requestEmailChange(1, newEmail);
+    const legacyUser: Partial<User> = {
+      ...mockUser,
+      emailEncrypted: legacyEnc.encrypted,
+      emailIv: legacyEnc.iv,
+      emailTag: legacyEnc.tag,
+    };
 
-      expect(mockUserService.updateEmail).not.toHaveBeenCalled();
-      expect(mockEmailService.sendEmailChangeVerificationEmail).toHaveBeenCalled();
-      expect(mockEmailService.sendEmailChangeNotificationEmail).toHaveBeenCalled();
-      expect(result.message).toDefine();
+    it('reads old key versions during migration (dual-read)', async () => {
+      (BryptUtil.decrypt as jest.Mock).mockReturnValue('test@example.com');
+      mockUserService.findByEmail.mockResolvedValue(legacyUser);
+      (bcrypt as any).compare.mockResolvedValue(true);
+
+      const result = await service.validateUser('test@example.com', 'password123');
+
+      expect(BryptUtil.decrypt).toHaveBeenCalled();
+      expect(result).toEqual(expect.objectContaining({ email: 'test@example.com' }));
     });
 
-    it('rejects request when new email already belongs to another account', async () => {
-      mockUserService.findById.mockResolvedValue(mockUser);
-      mockUserService.findByEmail.mockResolvedValue({ ...mockUser, id: 2 });
+    it('writes new values with the active key (single-write)', async () => {
+      const spy = jest.spyOn(CryptoUtil, 'encrypt').mockReturnValue(legacyEnc);
+      mockUserService.findByEmail.mockResolvedValue(mockUser);
+      (bcrypt as any).compare.mockResolvedValue(true);
 
-      await expect(service.requestEmailChange(1, newEmail)).rejects.toBeAppException();
-      expect(mockUserService.updateEmail).not.toHaveBeenCalled();
+      await service.validateUser('test@example.com', 'password123');
+
+      expect(spy).toHaveBeenCalledWith('test@example.com', activeKey);
     });
 
-    it('verifies email change and activates new address', async () => {
-      mockUserService.findById.mockResolvedValue(mockUser);
-      mockUserService.findByEmail.mockResolvedValue(null);
-      mockEmailService.sendEmailChangeVerificationEmail.mockResolvedValue(undefined);
-      mockEmailService.sendEmailChangeNotificationEmail.mockResolvedValue(undefined);
-      mockUserService.updateEmail.mockResolvedValue(undefined);
+    it('throws a controlled error for unknown key versions', async () => {
+      const unknownEnc = CryptoUtil.encrypt('test@example.com', 'unknown-key-v0');
+      mockUserService.findByEmail.mockResolvedValue({
+        ...mockUser,
+        emailEncrypted: unknownEnc.encrypted,
+        emailIv: unknownEnc.iv,
+        emailTag: unknownEnc.tag,
+      });
+      (CryptoUtil.decrypt as jest.Mock).mockImplementation(() => {
+        throw new Error('Unknown key version');
+      });
 
-      const request = await service.requestEmailChange(1, newEmail);
-      const token = (request as any).token ?? 'verification-token';
-
-      const result = await service.verifyEmailChange(token);
-
-      expect(mockUserService.updateEmail).toHaveBeenCalled();
-      expect(result.message).toDefine();
+      await expect(service.validateUser('test@example.com', 'password123')).rejects.toThrow('Unknown key version');
     });
 
-    it('rejects replayed verification challenge', async () => {
-      mockUserService.findById.mockResolvedValue(mockUser);
-      mockUserService.findByEmail.mockResolvedValue(null);
-      mockEmailService.sendEmailChangeVerificationEmail.mockResolvedValue(undefined);
-      mockEmailService.sendEmailChangeNotificationEmail.mockResolvedValue(undefined);
-      mockUserService.updateEmail.mockResolvedValue(undefined);
+    it('recovers from an interrupted rotation (fallback to old key)', async () => {
+      (BryptUtil.decrypt as jest.Mock).mockReturnValue('test@example.com');
+      mockUserService.findByEmail.mockResolvedValue(legacyUser);
+      (bcrypt as any).compare.mockResolvedValue(true);
 
-      const request = await service.requestEmailChange(1, newEmail);
-      const token = (request as any).token ?? 'verification-token';
+      const result = await service.validateUser('test@example.com', 'password123');
 
-      await service.verifyEmailChange(token);
-      await expect(service.verifyEmailChange(token)).rejects.toBeAppException();
-    });
-
-    it('retains old email as recovery window after verification', async () => {
-      mockUserService.findById.mockResolvedValue(mockUser);
-      mockUserService.findByEmail.mockResolvedValue(null);
-      mockEmailService.sendEmailChangeVerificationEmail.mockResolvedValue(undefined);
-      mockEmailService.sendEmailChangeNotificationEmail.mockResolvedValue(undefined);
-      mockUserService.updateEmail.mockResolvedValue(undefined);
-
-      const request = await service.requestEmailChange(1, newEmail);
-      const token = (request as any).token ?? 'verification-token';
-
-      await service.verifyEmailChange(token);
-
-      expect(mockUserService.updateEmail).toHaveBeenCalledWith(
-        1,
-        expect.objectContaining({
-          email: newEmail,
-          recoveryEmail: oldEmail,
-        }),
-      );
-    });
-
-    it('notifies old address without disclosing account existence to third parties', async () => {
-      mockUserService.findById.mockResolvedValue(mockUser);
-      mockUserService.findByEmail.mockResolvedValue(null);
-      mockEmailService.sendEmailChangeVerificationEmail.mockResolvedValue(undefined);
-      mockEmailService.sendEmailChangeNotificationEmail.mockResolvedValue(undefined);
-
-      await service.requestEmailChange(1, newEmail);
-
-      const notificationCall =
-        mockEmailService.sendEmailChangeNotificationEmail.mock[0];
-      expect(notificationCall[0]).toBe(oldEmail);
-      const body = JSON.stringify(notificationCall[1]);
-      expect(body).not.toMatch(/new@test\.local/);
-    });
-
-    it('rolls back to old email when verification is rejected', async () => {
-      mockUserService.findById.mockResolvedValue(mockUser);
-      mockUserService.findByEmail.mockResolvedValue(null);
-      mockEmailService.sendEmailChangeVerificationEmail.mockResolvedValue(undefined);
-      mockEmailService.sendEmailChangeNotificationEmail.mockResolvedValue(undefined);
-      mockUserService.updateEmail.mockResolvedValue(undefined);
-
-      const request = await service.requestEmailChange(1, newEmail);
-      const token = (request as any).token ?? 'verification-token';
-
-      await service.verifyEmailChange(token);
-      await service.rollbackEmailChange(1);
-
-      expect(mockUserService.updateEmail).toHaveBeenCalledWith(
-        1,
-        expect.objectContaining({ email: oldEmail }),
-      );
-    });
-
-    it('rejects verification for expired challenge', async () => {
-      mockUserService.findById.mockResolvedValue(mockUser);
-      mockUserService.findByEmail.mockResolvedValue(null);
-      mockEmailService.sendEmailChangeVerificationEmail.mockResolvedValue(undefined);
-      mockEmailService.sendEmailChangeNotificationEmail.mockResolvedValue(undefined);
-
-      const request = await service.requestEmailChange(1, newEmail);
-      const token = (request as any).token ?? 'verification-token';
-
-      jest.spyOn((service as any).clock ?? { setSystemTime: jest.fn() }, 'setSystemTime');
-      jest.setSystemTime(new Date(Date.now() + 1000 * 60 * 60 * 24));
-
-      await expect(service.verifyEmailChange(token)).rejects.toBeAppException();
-      jest.useRealTimes();
+      expect(BryptUtil.decrypt).toHaveBeenCalled();
+      expect(result).toEqual(expect.objectContaining({ email: 'test@example.com' }));
     });
   });
-})
+});

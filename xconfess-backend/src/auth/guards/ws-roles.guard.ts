@@ -10,6 +10,17 @@ import { UserRole } from '../../user/entities/user.entity';
 import { WS_ROLES_KEY } from '../decorators/ws-roles.decorator';
 
 /**
+ * Consistent rejection payload shape emitted to clients when a
+ * subscription is denied. Keeping this in one place ensures the
+ * authorization matrix tests can assert on a stable contract.
+ */
+export interface WsSubscriptionRejection {
+  reason: string;
+  code: 'UNAUTHENTICATED' | 'FORBIDDEN';
+  timestamp: string;
+}
+
+/**
  * WebSocket subscription-level roles guard.
  *
  * Works together with the @WsRoles() decorator. When applied to a
@@ -52,8 +63,9 @@ export class WsRolesGuard implements CanActivate {
       );
       client.emit('subscription:rejected', {
         reason: 'Authentication required',
+        code: 'UNAUTHENTICATED',
         timestamp: new Date().toISOString(),
-      });
+      } satisfies WsSubscriptionRejection);
       return false;
     }
 
@@ -65,8 +77,9 @@ export class WsRolesGuard implements CanActivate {
       );
       client.emit('subscription:rejected', {
         reason: `Insufficient permissions. Required role(s): ${requiredRoles.join(', ')}`,
+        code: 'FORBIDDEN',
         timestamp: new Date().toISOString(),
-      });
+      } satisfies WsSubscriptionRejection);
       return false;
     }
 

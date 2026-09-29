@@ -156,5 +156,13 @@
       branches: 40,
       statements: 55,
     },
+
+    // --- AUTHORIZATION MATRIX (high risk: cross-tenant privilege escalation) ---
+    './src/authz/': {
+      lines: 70,
+      functions: 65,
+      branches: 55,
+      statements: 70,
+    },
   },
 };

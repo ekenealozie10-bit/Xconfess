@@ -41,10 +41,20 @@ on:
         required: false
         default: main
 
+  # Allow CD to call this workflow as a reusable verification gate.
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to attest (branch, tag, or SHA)
+        required: false
+        type: string
+        default: main
+
 permissions:
   contents: write       # upload artifacts to a release
   id-token: write       # required for OIDC-based signing
   attestations: write   # write attestations to the GitHub registry
+  packages: write       # required for container image attestations
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
@@ -67,6 +77,8 @@ jobs:
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event_name }}" == "workflow_call" ]]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
           elif [[ "${{ github.event.workflow_run.conclusion }}" == "success" ]]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
           else
@@ -80,12 +92,16 @@ jobs:
     needs: check-ci
     if: needs.check-ci.outputs.should_run == 'true'
     runs-on: ubuntu-latest
+    outputs:
+      short_sha: ${{ steps.meta.outputs.short_sha }}
+      backend_artifact: ${{ steps.meta.outputs.backend_artifact }}
+      frontend_artifact: ${{ steps.meta.outputs.frontend_artifact }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.event.inputs.ref || github.sha }}
+          ref: ${{ github.event.workflow_run.head_sha || github.event.inputs.ref || github.event.workflow_call.inputs.ref || github.sha }}
           fetch-depth: 0
 
       - name: Setup Node
@@ -116,6 +132,18 @@ jobs:
           NEXT_PUBLIC_DEV_BYPASS_AUTH: 'false'
         run: npm run frontend:build
 
+      - name: Build contracts
+        run: npm run contracts:build
+
+      - name: Resolve artifact metadata
+        id: meta
+        run: |
+          COMMIT="${{ github.event.workflow_run.head_sha || github.sha }}"
+          SHORT="${COMMIT:0:12}"
+          echo "short_sha=${SHORT}" >> "$GITHUB_OUTPUT"
+          echo "backend_artifact=xconfess-backend-${SHORT}.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "frontend_artifact=xconfess-frontend-${SHORT}.tar.gz" >> "$GITHUB_OUTPUT"
+
       # ── Create tarballs for artifact identification ──────────────────────
       # Tarballs are deterministically named by commit SHA so attestations
       # can be looked up by artifact identity after deployment.
@@ -135,6 +163,12 @@ jobs:
           tar -czf "xconfess-frontend-${SHORT_SHA}.tar.gz" \
             -C xconfess-frontend .next public
           echo "FRONTEND_ARTIFACT=xconfess-frontend-${SHORT_SHA}.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Package contracts artifact
+        run: |
+          tar -czf "xconfess-contracts-${SHORT_SHA}.tar.gz" \
+            -C xconfess-contracts target
+          echo "CONTRACTS_ARTIFACT=xconfess-contracts-${SHORT_SHA}.tar.gz" >> "$GITHUB_ENV"
 
       # ── Generate CycloneDX SBOMs ─────────────────────────────────────────
       # @cyclonedx/cyclonedx-npm generates a CycloneDX 1.6 JSON SBOM per
@@ -164,6 +198,16 @@ jobs:
             xconfess-frontend/package.json
         continue-on-error: false
 
+      - name: Generate contracts SBOM
+        run: |
+          cyclonedx-npm \
+            --package-lock-only \
+            --output-format JSON \
+            --output-file "sbom-contracts-${SHORT_SHA}.cdx.json" \
+            --spec-version 1.6 \
+            xconfess-contracts/package.json
+        continue-on-error: false
+
       # ── SLSA provenance attestations ─────────────────────────────────────
       # actions/attest-build-provenance generates a SLSA v1.0 provenance
       # statement signed with the OIDC token for this workflow run.  The
@@ -184,6 +228,12 @@ jobs:
         with:
           subject-path: ${{ env.FRONTEND_ARTIFACT }}
 
+      - name: Attest contracts build provenance
+        id: attest-contracts
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ env.CONTRACTS_ARTIFACT }}
+
       - name: Attest backend SBOM
         uses: actions/attest-sbom@v2
         with:
@@ -195,6 +245,12 @@ jobs:
         with:
           subject-path: ${{ env.FRONTEND_ARTIFACT }}
           sbom-path: sbom-frontend-${{ env.SHORT_SHA }}.cdx.json
+
+      - name: Attest contracts SBOM
+        uses: actions/attest-sbom@v2
+        with:
+          subject-path: ${{ env.CONTRACTS_ARTIFACT }}
+          sbom-path: sbom-contracts-${{ env.SHORT_SHA }}.cdx.json
 
       # ── Upload artifacts for CD jobs to download ─────────────────────────
 
@@ -226,12 +282,22 @@ jobs:
           path: sbom-frontend-${{ env.SHORT_SHA }}.cdx.json
           retention-days: 30
 
+      - name: Upload contracts artifact and SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: xconfess-contracts-attested-${{ env.SHORT_SHA }}
+          path: |
+            ${{ env.CONTRACTS_ARTIFACT }}
+            sbom-contracts-${{ env.SHORT_SHA }}.cdx.json
+          retention-days: 30
+
       # ── Summary ──────────────────────────────────────────────────────────
 
       - name: Write attestation summary
         run: |
           BACKEND_SHA=$(sha256sum "${BACKEND_ARTIFACT}" | awk '{print $1}')
           FRONTEND_SHA=$(sha256sum "${FRONTEND_ARTIFACT}" | awk '{print $1}')
+          CONTRACTS_SHA=$(sha256sum "${CONTRACTS_ARTIFACT}" | awk '{print $1}')
           {
             echo "## Provenance & SBOM Attestations"
             echo ""
@@ -239,11 +305,16 @@ jobs:
             echo "|----------|---------|-------------|"
             echo "| \`${BACKEND_ARTIFACT}\` | \`${BACKEND_SHA}\` | ✅ SLSA provenance + SBOM |"
             echo "| \`${FRONTEND_ARTIFACT}\` | \`${FRONTEND_SHA}\` | ✅ SLSA provenance + SBOM |"
+            echo "| \`${CONTRACTS_ARTIFACT}\` | \`${CONTRACTS_SHA}\` | ✅ SLSA provenance + SBOM |"
             echo ""
             echo "### Verification"
             echo '```bash'
             echo "# Verify backend artifact provenance"
             echo "gh attestation verify ${BACKEND_ARTIFACT} \\"
+            echo "  --repo ${{ github.repository }}"
+            echo ""
+            echo "# Verify contracts artifact provenance"
+            echo "gh attestation verify ${CONTRACTS_ARTIFACT} \\"
             echo "  --repo ${{ github.repository }}"
             echo ""
             echo "# Verify frontend artifact provenance"
@@ -271,7 +342,7 @@ jobs:
       - name: Download attested backend artifact
         uses: actions/download-artifact@v4
         with:
-          name: xconfess-backend-attested-${{ needs.attest.outputs.short_sha || env.SHORT_SHA }}
+          name: xconfess-backend-attested-${{ needs.attest.outputs.short_sha }}
         continue-on-error: true
 
       - name: Verify backend provenance
@@ -298,3 +369,33 @@ jobs:
           fi
 
           echo "✔ Backend provenance verified."
+
+      - name: Download attested frontend artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: xconfess-frontend-attested-${{ needs.attest.outputs.short_sha }}
+        continue-on-error: true
+
+      - name: Verify frontend provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ARTIFACT=$(ls xconfess-frontend-*.tar.gz 2>/dev/null | head -1)
+          if [[ -z "$ARTIFACT" ]]; then
+            echo "::error::Missing frontend artifact — provenance metadata required."
+            exit 1
+          fi
+          gh attestation verify "${ARTIFACT}" \
+            --repo "${{ github.repository }}" \
+            --format json > /dev/null
+          echo "✔ Frontend provenance verified."
+
+      - name: Fail on missing provenance metadata
+        run: |
+          if [[ ! -f attestation-verify-result.json ]]; then
+            echo "::error::Malformed or missing provenance metadata."
+            exit 1
+          fi
+          jq -e '.[0].verificationResult' attestation-verify-result.json > /dev/null \
+            || { echo "::error::Malformed provenance metadata."; exit 1; }
+          echo "✔ Provenance metadata well-formed."

@@ -59,7 +59,7 @@ export class RegisterDto {
 
   @ApiProperty({
     description:
-      'Display name (3–30 chars, alphanumeric and underscores only).',
+      'Display name (3-30 chars, alphanumeric and underscores only).',
     example: 'alice_42',
     minLength: 3,
     maxLength: 30,
