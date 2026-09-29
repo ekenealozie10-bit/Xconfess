@@ -18,11 +18,111 @@ import {
   csrfMiddleware,
   csrfCookieSetter,
 } from './common/middleware/middleware';
+
+/**
+ * Content-Security-Policy ownership.
+ *
+ * The frontend proxy and the backend must agree on a single policy before
+ * enforcement. This module is the backend's authoritative source of truth for
+ * the CSP directives and for the report-only / enforce rollout switch.
+ *
+ * Rollout model:
+ *   - CSP_MODE=report-only (default) -> sends Content-Security-Policy-Report-Only
+ *   - CSP_MODE=enforce              -> sends Content-Security-Policy
+ *   - CSP_MODE=disabled             -> no CSP header at all (kill-switch)
+ *
+ * Reports are collected at CSP_REPORT_URI and are sanitized by the browser
+ * (see docs/security/csp-rollout.md). The backend never logs the raw
+ * report body and the report endpoint is exempt from CSRF because browsers
+ * send these without credentials.
+ */
+
+export type CspMode = 'report-only' | 'enforce' | 'disabled';
+
+export interface CspPolicy {
+  mode: CspMode;
+  directives: Record<string, string[]>;
+  reportUri?: string;
+}
+
+const DEFAULT_CSP_REPORT_URI = '/api/security/csp-report';
+
+const DEFAULT_CSP_DIRECTIVES: Record<string, string[]> = {
+  defaultSrc: ['self'],
+  scriptSrc: ['self'],
+  styleSrc: ['self', 'unsafe-inline'],
+  imgSrc: ['self', 'data:', 'https:'],
+  fontSrc: ['self', 'data:'],
+  connectSrc: ['self'],
+  frameSrc: ['none'],
+  frameAncestors: ['none'],
+  objectSrc: ['none'],
+  baseUri: ['self'],
+  formAction: ['self'],
+  upgradeInsecureRequests: [],
+};
+
+function parseCspMode(raw: string | undefined): CspMode {
+  const normalized = (raw ?? 'report-only').trim().toLowerCase();
+  if (normalized === 'enforce') return 'enforce';
+  if (normalized === 'disabled') return 'disabled';
+  return 'report-only';
+}
+
+function parseCspDirectives(
+  raw: string | undefined,
+): Record<string, string[]> {
+  if (!raw) return { ...DEFAULT_CSP_DIRECTIVES };
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<string, string[]> = { ...DEFAULT_CSP_DIRECTIVES };
+    for (const [key, value] of Object.entries(parsed)) {
+      if (Array.isArray(value) && value.every((v) => typeof v === 'string')) {
+        out[key] = value as string[];
+      }
+    }
+    return out;
+  } catch {
+    return { ...DEFAULT_CSP_DIRECTIVES };
+  }
+}
+
+export function resolveCspPolicy(configService: ConfigService): CspPolicy {
+  const mode = parseCspMode(configService.get<string>('CSP_MODE'));
+  const directives = parseCspDirectives(
+    configService.get<string>('CSP_DIRECTIVES'),
+  );
+  const reportUri =
+    configService.get<string>('CSP_REPORT_URI') ?? DEFAULT_CSP_REPORT_URI;
+  return { mode, directives, reportUri };
+}
+
+function buildHelmetOptions(policy: CspPolicy): Parameters<typeof helmet>[0] {
+  const contentSecurityPolicy =
+    policy.mode === 'disabled'
+      ? false
+      : {
+          useDefaults: false,
+          directives: policy.directives,
+          reportOnly: policy.mode === 'report-only',
+          ...(policy.reportUri
+            ? { reportUri: policy.reportUri }
+            : {}),
+        };
+
+  return {
+    contentSecurityPolicy,
+    // helmet v7 removed the xssFilter / noSniff shorthand aliases;
+    // xssProtection and noSniff are enabled by default — no need to re-declare.
+    frameguard: { action: 'deny' },
+  };
+}
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bodyParser: false });
   const configService = app.get(ConfigService);
 
-  // â”€â”€ 1. Request-ID must be first so all downstream code sees it â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── 1. Request-ID must be first so all downstream code sees it ───────────────
   const requestIdMiddleware = new RequestIdMiddleware();
   app.use(requestIdMiddleware.use.bind(requestIdMiddleware));
 
@@ -31,27 +131,16 @@ async function bootstrap() {
 
   app.enableShutdownHooks();
 
-  // â”€â”€ 2. Security headers â€” single authoritative path for all HTTP responses â”€â”€
+  // ── 2. Security headers — single authoritative path for all HTTP responses ──
   //    SecurityMiddleware is intentionally NOT registered as a Nest middleware
   //    because it was never wired into the middleware consumer.  Applying Helmet
   //    here in bootstrap ensures it runs on every request without exception.
-  app.use(
-    helmet({
-      contentSecurityPolicy: {
-        directives: {
-          defaultSrc: ["'self'"],
-          scriptSrc: ["'self'"],
-          objectSrc: ["'none'"],
-          upgradeInsecureRequests: [],
-        },
-      },
-      // helmet v7 removed the xssFilter / noSniff shorthand aliases;
-      // xssProtection and noSniff are enabled by default â€” no need to re-declare.
-      frameguard: { action: 'deny' },
-    }),
-  );
+  //    CSP directives and the report-only / enforce switch are owned here and
+  //    are documented in docs/security/csp-rollout.md.
+  const cspPolicy = resolveCspPolicy(configService);
+  app.use(helmet(buildHelmetOptions(cspPolicy)));
 
-  // â”€â”€ 3. CORS â€” one allowed origin derived from config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── 3. CORS — one allowed origin derived from config ───────────────────────
   //    Both HTTP and the WebSocket adapter read FRONTEND_URL so there is a
   //    single documented source of truth for allowed origins.
   const frontendUrl =
@@ -63,10 +152,10 @@ async function bootstrap() {
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
   });
 
-  // â”€â”€ 4. WebSocket adapter â€” reads the same FRONTEND_URL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── 4. WebSocket adapter — reads the same FRONTEND_URL ──────────────────────
   app.useWebSocketAdapter(new WebSocketAdapter(app, configService));
 
-  // â”€â”€ 5. Compression â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── 5. Compression ──────────────────────────────────────────────────────────
   app.use(
     compression({
       filter: (req, res) => {
@@ -79,14 +168,15 @@ async function bootstrap() {
     }),
   );
 
-
-  // ── 6. Cookie parser (required by csurf) ────────────────────────────────────
+  // ── 6. Cookie parser (required by csurf) ───────────────────────────────────
   app.use(cookieParserMiddleware);
 
-  // ── 7. CSRF protection ────────────────────────────────────────────────────────
+  // ── 7. CSRF protection ────────────────────────────────────────────────────────────────────────
   //    Webhooks are exempt because they use HMAC signature verification instead.
   //    Public account-entry routes are exempt because the Next.js proxy calls
   //    them server-side before a browser CSRF cookie exists.
+  //    CSP report endpoint is exempt because browsers post reports without
+  //    credentials and the payload is already sanitized by the browser.
   const csrfExemptRoutes = new Set([
     'POST /api/auth/login',
     'POST /api/auth/2fa/login',
@@ -99,6 +189,7 @@ async function bootstrap() {
     const routeKey = `${req.method.toUpperCase()} ${req.path}`;
     if (
       req.path.startsWith('/api/webhooks/moderation') ||
+      req.path === '/api/security/csp-report' ||
       csrfExemptRoutes.has(routeKey)
     ) {
       return next();
@@ -127,7 +218,7 @@ async function bootstrap() {
     const config = new DocumentBuilder()
       .setTitle('xConfess API')
       .setDescription(
-        'Anonymous confession platform API â€” confessions, reactions, messages, reports, admin, and Stellar integration.',
+        'Anonymous confession platform API — confessions, reactions, messages, reports, admin, and Stellar integration.',
       )
       .setVersion('1.0')
       .addBearerAuth()
@@ -159,7 +250,7 @@ async function bootstrap() {
   const port = configService.get<number>('app.port', 3000);
   await app.listen(port);
 
-  // â”€â”€ Startup Summary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Startup Summary ──────────────────────────────────────────────────────────
   const logger = app.get(AppLogger);
   const env = configService.get<string>('NODE_ENV', 'development');
   const dbHost = configService.get<string>('DB_HOST', 'localhost');
@@ -169,11 +260,15 @@ async function bootstrap() {
   const backgroundJobMode = configService.get<string>('ENABLE_BACKGROUND_JOBS', 'false');
   
   logger.log(
-    `ðŸš€ Application started successfully`,
+    `🚂 Application started successfully`,
     'Bootstrap'
   );
   logger.log(
     `Environment: ${env} | Port: ${port} | DB: ${dbHost}:${dbPort} | Redis: ${redisHost}:${redisPort} | Background Jobs: ${backgroundJobMode}`,
+    'Bootstrap'
+  );
+  logger.log(
+    `CSP: ${cspPolicy.mode} | Report URI: ${cspPolicy.reportUri ?? 'n/a'}`,
     'Bootstrap'
   );
 }

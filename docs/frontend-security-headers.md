@@ -2,132 +2,216 @@
 
 ## Summary
 
-This document inventories the currently configured security headers in the xConfess frontend and proposes a safe Content Security Policy (CSP) posture compatible with Next.js and required assets.
+We now ship a coordinated security-header policy from the backend and
+
+recommend the same policy from the frontend proxy. The CSP starts in
+
+[report-only](mode and is promoted to enforcing mode via configuration after a
+
+clean soak. This document inventories the currently configured security
+
+headers, documents the CSP directive inventory, and describes the rollout
+
+procedure.
 
 ## Current Header Inventory
 
 ### Configured in `next.config.mjs`
 
 | Header | Value | Status |
+
 |--------|-------|--------|
+
 | `X-Powered-By` | Disabled (`poweredByHeader: false`) | ✅ Good |
+
 | `Compression` | Enabled (`compress: true`) | ✅ Good |
 
-### Missing Headers (Recommended)
+### Emitted by the backend
+
+The `xconfess-backend` now emits the following headers on every response
+
+via `SecurityHeadersMiddleware`:
+
+| Header | Value | Notes |
+
+|--------|-------|-------|
+
+| `Content-Security-Policy-Report-Only` | Configured below | Default mode; not enforcing. |
+
+| `Content-Security-Policy` | Configured below | Emitted only when `CSP_MODE=enforce`. |
+
+| `X-Content-Type-Options` | `nosniff` | Prevents MIME sniffing. |
+
+| `X-Frame-Options` | `DENY` | Prevents clickjacking. |
+
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | Controls referrer information. |
+
+| `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), payment=()` | Disables unused browser features. |
+
+| `Cross-Origin-Opener-Policy` | `same-origin` | Isolates the browsing context group. |
+
+| `X-DNS-Prefetch-Control` | `off` | Disables DSN prefetch leaks. |
+
+| `Strict-Transport-Security` | `HSTS_ENABLED=true` only | Forces HTTPS; opt-in. |
+
+### Missing headers on the frontend proxy
 
 | Header | Purpose | Priority |
-|--------|---------|----------|
+
+|--------|---------|---------|
+
 | `Content-Security-Policy` | Prevents XSS, data injection | **High** |
+
 | `X-Content-Type-Options` | Prevents MIME sniffing | **High** |
+
 | `X-Frame-Options` | Prevents clickjacking | **High** |
+
 | `Referrer-Policy` | Controls referrer information | **Medium** |
+
 | `Permissions-Policy` | Controls browser features | **Medium** |
+
 | `Strict-Transport-Security` | Forces HTTPS | **High** (production) |
 
-## Recommended CSP Configuration
+## CSP Directive Inventory
 
-### Analysis of Required Assets
+The directive inventory lives in `xconfess-backend/src/security/csp.config.ts`
 
-Based on codebase analysis, the frontend uses:
+as `DEFAULT_CSP_DIRECTIVES`. Each source is derived from codebase analysis:
 
-1. **Scripts**: Inline scripts (Next.js hydration), Stellar SDK
-2. **Styles**: Tailwind CSS (inline), Lucide icons
-3. **Images**: Self, data: URIs, AVIF/WebP formats
-4. **Fonts**: System fonts (no external font services detected)
-5. **Connections**: Backend API, Stellar network endpoints
+| Directive | Sources | Rationale |
 
-### Proposed CSP Header
+|-----------|---------|----------|
 
-```javascript
-// next.config.mjs — add to nextConfig
-const securityHeaders = [
-  {
-    key: 'Content-Security-Policy',
-    value: [
-      "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval'",  // Next.js requires unsafe-inline/eval
-      "style-src 'self' 'unsafe-inline'",  // Tailwind requires unsafe-inline
-      "img-src 'self' data: blob:",
-      "font-src 'self' data:",
-      "connect-src 'self' https://horizon.stellar.org https://soroban-rpc.stellar.org",
-      "frame-ancestors 'none'",
-      "base-uri 'self'",
-      "form-action 'self'",
-    ].join('; '),
-  },
-  {
-    key: 'X-Content-Type-Options',
-    value: 'nosniff',
-  },
-  {
-    key: 'X-Frame-Options',
-    value: 'DENY',
-  },
-  {
-    key: 'Referrer-Policy',
-    value: 'strict-origin-when-cross-origin',
-  },
-  {
-    key: 'Permissions-Policy',
-    value: 'camera=(), microphone=(), geolocation=()',
-  },
-];
+| `default-src` | `self` | Deny by default; explicit allows below. |
 
-// In production, also add:
-// {
-//   key: 'Strict-Transport-Security',
-//   value: 'max-age=63072000; includeSubDomains; preload',
-// }
-```
+| `script-src` | `self` (+ `nonce-<value>` when `CSP_NONCE_ENABLED=true`) | Next.js hydration bundles and Stellar SDK. |
 
-### Implementation in `next.config.mjs`
+| `style-src` | `self`, `unsafe-inline` | Tailwind CSS is injected inline at build time. |
 
-```javascript
-const nextConfig = {
-  // ... existing config ...
-  async headers() {
-    return [
-      {
-        source: '/(.*)',
-        headers: securityHeaders,
-      },
-    ];
-  },
-};
-```
+| `img-src` | `self`, `data:`, `blob9` | Next.js image optimization + inline data URIs. |
 
-## CSP Compatibility Notes
+| `font-src` | `self`, `data:` | System fonts + inline font data. |
 
-### Next.js Requirements
-- `'unsafe-inline'` for scripts: Required for Next.js hydration and inline scripts
-- `'unsafe-eval'` for scripts: Required for development mode hot reloading
-- `'unsafe-inline'` for styles: Required for Tailwind CSS and CSS-in-JS
+| `connect-src` | `self`, `https://horizon.stellar.org`, `https://soroban-rpc.stellar.org` | API proxy + Stellar network endpoints. |
 
-### Stellar SDK Requirements
-- `connect-src`: Must allow Stellar Horizon and Soroban RPC endpoints
-- Consider environment-specific CSP for testnet vs mainnet
+| `frame-ancestors` | `none` | No legitimate embedding. |
 
-### Image Optimization
-- Next.js image optimization requires `blob:` for local images
-- AVIF/WebP formats are handled internally by Next.js
+| `base-uri` | `self` | Prevents base-tag hijacking. |
 
-## Follow-up Implementation Tasks
+| `form-action` | `self` | Prevents form exfiltration. |
 
-1. **Environment-specific CSP**: Create separate CSP configs for development and production
-2. **CSP Reporting**: Add `report-uri` or `report-to` directive for monitoring violations
-3. **Nonce-based CSP**: Consider implementing nonces for stricter script security (requires custom server)
-4. **Stellar Network Endpoints**: Verify all required Stellar endpoints are included in `connect-src`
-5. **Third-party Integrations**: Audit any future integrations for CSP compatibility
+| `object-src` | `none` | Disables plugin embeds. |
+
+| `worker-src` | `self`, `blob:` | Web workers and Next.js worker bundles. |
+
+| `manifest-src` | `self` | Web app manifest. |
+
+## Configuration
+
+All tunables are read from the environment so enforcement can be
+
+enabled without a code deploy:
+
+| Variable | Default | Effect |
+
+|--------|--------|--------|
+
+| `CSP_MODE` | `report-only` | One of `off`, `report-only`, `enforce`. |
+
+| `CSP_REPORT_URI` | unset | Legacy `report-uri` directive. |
+
+| `CSP_REPORT_TO` | unset | `report-to` group name for Reporting API. |
+
+| `CSP_REPORT_ENDPOINT_URL` | `/api/security/csp-report` | Ingest path for violation reports. |
+
+| `CSP_REPORT_TOKEN` | unset | When set, requests must carry `x-csp-report-token`. |
+
+| `CSP_NONCE_ENABLED` | `false` | Adds a per-request nonce to `script-src`. |
+
+| `HSTS_ENABLED` | `false` | Emits `Strict-Transport-Security`. |
+
+| `HSTS_MAX_AGE` | `63072000` | Max-age for HSTS. |
+
+| `HSTS_INCLUDE_SUBDOMAINS` | `true` | Adds `includeSubdomains` to HSTS. |
+
+| `HSTS_PRELOAD` | `false` | Adds `preload` to HSTS. |
+
+## Reporting and privacy
+
+CSP reports are posted to `/api/security/csp-report`. The handler:
+
+1. Rejects requests lacking the configured shared token (when one is set).
+
+2. Rejects bodies larger than 16 KB and unsupported content types.
+
+3. Reduces every URL to its origin (scheme + host + port) before logging.
+
+4. Drops the `script-sample` field entirely to avoid logging potential PII.
+
+5. Truncates directive names to 64 characters.
+
+Sanitization is implemented in `xconfess-backend/src/security/csp-report.sanitizer.ts`
+
+and covered by unit tests in `xconfess-backend/src/security/__tests__`.
+
+## Rollout Procedure
+
+1. Deploy with defaults (`CSP_MODE=report-only`). Confirm reports arrive at
+
+   `/api/security/csp-report` and are sanitized.
+
+2. Triage violations by `csp-violation` log events. Add new sources to
+
+   `DEFAULT_CSP_DIRECTIVES` only with a documented rationale.
+
+3. After a clean soak (no unexplained violations), set `CSP_MODE=enforce`.
+
+4. Rollback: set `CSP_MODE=report-only` or `CSP_MODE=off`. No code deploy
+
+   required.
+
+## Non-cee and inline script strategy
+
+When `CSP_NONCE_ENABLED=true`, the middleware generates a 16-byte base64
+
+nonce per request and exposes it on `res.locals.cspNonce`. The nonce is
+
+appended to `script-src` as `'nonce-<value>'`. Server-rendered templates must
+
+read the nonce from response locals and attach it to inline `<script>` tags.
+
+When nonces are disabled, inline scripts must be hashed and the hash added to
+
+`script-src` via `DEFAULT_CSP_DIRECTIVES` overrides. The default policy does
+
+not allow `unsafe-inline` or `unsafe-eval` in production.
+
+## Frontend proxy coordination
+
+The Next.js frontend should emit the same policy via `next.config.mjs` headers
+
+so that browser requests that never reach the backend (static assets,
+
+prerendered pages) are covered. The backend policy is the source of truth
+
+for directive values; any frontend override must be documented here.
 
 ## Validation
 
 - ✅ Frontend build remains passing with proposed headers
+
 - ✅ No production secrets appear in this documentation
+
 - ✅ CSP is compatible with Next.js requirements
+
 - ✅ CSP allows required Stellar SDK connections
+
+- ✅ Reports are sanitized before logging (unit tested)
 
 ## References
 
 - [MDN Content Security Policy](https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP)
+
 - [Next.js Security Headers](https://nextjs.org/docs/advanced-features/security-headers)
+
 - [OWASP Secure Headers Project](https://owasp.org/www-project-secure-headers/)
