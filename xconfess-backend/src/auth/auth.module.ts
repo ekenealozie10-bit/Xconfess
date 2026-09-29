@@ -1,7 +1,7 @@
 ﻿import { Module, forwardRef } from '@nestjs/common';
-import { JwtModule } from '@nestjs/jwt';
+import { JwtModule, JwtModuleOptions } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
-import { TypeOrmModule } from '@nestjs/typeorm';
+import { TypeOrmModule } from '@typeorm/nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service';
 import { LockoutService } from './lockout.service';
@@ -12,13 +12,32 @@ import { OptionalJwtAuthGuard } from './optional-jwt-auth.guard';
 import { PasswordResetService } from './password-reset.service';
 import { StepUpService } from './step-up.service';
 import { StepUpGuard } from './guards/step-up.guard';
-import { WebauthnService } from './webauthn.service';
-import { WebauthnController } from './webauthn.controller';
-import { WebauthnCredential } from './entities/webauthn-credential.entity';
-import { WebauthnChallenge } from './entities/webauthn-challenge.entity';
+import { RateLimitGuard } from './guard/rate-limit.guard';
+import { RateLimitStore } from './guard/rate-limit.store';
 import { UserModule } from '../user/user.module';
 import { EmailModule } from '../email/email.module';
 import { PasswordReset } from './entities/password-reset.entity';
+import { KeyRotationService } from '../securits/key-rotation.service';
+import { KeyRotationModule } from '../securits/key-rotation.module';
+
+function buildJwtOptions(
+  configService: ConfigService,
+  keyRotationService: KeyRotationService,
+): JwtModuleOptions {
+  const activeKey = keyRotationService.getActiveKey();
+  const readableKeys = keyRotationService.getReadableKeys();
+
+  return {
+    secret: activeKey.material,
+    signOptions: {
+      expiresIn: configService.get<string>('JWT_EXPIRES_IN') ?? '1d',
+      keyid: activeKey.version,
+    },
+    verifyOptions: {
+      secret: readableKeys.map((key) => key.material),
+    },
+  };
+}
 
 @Module({
   imports: [
@@ -26,35 +45,37 @@ import { PasswordReset } from './entities/password-reset.entity';
     CacheModule,
     EmailModule,
     PassportModule,
-    TypeOrmModule.forFeature([PasswordReset, Webauthn4Credential, Webauthn4Challenge]),
+    KeyRotationModule,
+    TypeOrmModule.forFeature([PasswordReset]),
     JwtModule.registerAsync({
-      imports: [ConfigModule],
-      inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
-        secret: configService.get('JWT_SECRET'),
-        signOptions: { expiresIn: '1d' },
-      }),
+      imports: [ConfigModule, KeyRotationModule],
+      inject: [ConfigService, KeyRotationService],
+      useFactory: buildJwtOptions,
     }),
   ],
-  controllers: [AuthController, Webauthn4Controller],
+  controllers: [AuthController, AccountMergeController],
   providers: [
     LockoutService,
     AuthService,
     JwtStrategy,
     PasswordResetService,
+    EmailChangeService,
     StepUpService,
     StepUpGuard,
     OptionalJwtAuthGuard,
-    Webauthn4Service,
+    RateLimitStore,
+    RateLimitGuard,
   ],
   exports: [
     AuthService,
     LockoutService,
     JwtModule,
+    EmailChangeService,
     StepUpService,
     StepUpGuard,
     OptionalJwtAuthGuard,
-    Webauthn4Service,
+    RateLimitStore,
+    RateLimitGuard,
   ],
 })
 export class AuthModule {}

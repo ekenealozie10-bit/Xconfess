@@ -17,6 +17,7 @@
  *   --format <fmt>     Output format: markdown (default) | json | checklist
  *   --output <file>    Write to file instead of stdout
  *   --check-unreleased Fail with exit 1 if there are unreleased entries with no tag
+ *   --sbom <file>      Path to SBOM/provenance manifest to validate and reference
  *
  * Acceptance criteria (issue #134):
  *   - Notes identify breaking changes, flags, migrations, rollback constraints,
@@ -26,6 +27,7 @@
  * Exit codes:
  *   0  Success
  *   1  --check-unreleased: unreleased entries found
+ *   1  --sbom: malformed or missing provenance metadata
  *   2  Usage error
  */
 
@@ -45,6 +47,7 @@ function parseArgs(argv = process.argv.slice(2)) {
     format: 'markdown',
     output: null,
     checkUnreleased: false,
+    sbom: null,
   };
   for (let i = 0; i < argv.length; i++) {
     switch (argv[i]) {
@@ -53,6 +56,7 @@ function parseArgs(argv = process.argv.slice(2)) {
       case '--format':         opts.format = argv[++i]; break;
       case '--output':         opts.output = argv[++i]; break;
       case '--check-unreleased': opts.checkUnreleased = true; break;
+      case '--sbom':           opts.sbom = argv[++i]; break;
       case '--help': case '-h':
         console.log(fs.readFileSync(__filename, 'utf8').split('\n')
           .filter(l => l.startsWith(' *')).map(l => l.replace(/^ \* ?/, '')).join('\n'));
@@ -153,6 +157,73 @@ function categorizeCommits(commits) {
   return categories;
 }
 
+// ── SBOM / provenance metadata ───────────────────────────────────────────────
+const SBOM_REQUIRED_TARGETS = ['backend', 'frontend', 'contracts', 'container'];
+
+function validateSbom(sbomPath) {
+  const errors = [];
+  if (!sbomPath) {
+    return { ok: false, errors: ['No SBOM path provided (--sbom <file>)'] };
+  }
+  const abs = path.isAbsolute(sbomPath) ? sbomPath : path.join(REPO_ROOT, sbomPath);
+  if (!fs.existsSync(abs)) {
+    return { ok: false, errors: [`SBOM file not found: ${sbomPath}`] };
+  }
+  let doc;
+  try {
+    doc = JSON.parse(fs.readFileSync(abs, 'utf8'));
+  } catch (err) {
+    return { ok: false, errors: [`SBOM is not valid JSON: ${err.message}`] };
+  }
+  if (!doc || typeof doc !== 'object') {
+    return { ok: false, errors: ['SBOM root must be an object'] };
+  }
+  if (!doc.spdxVersion && !doc.bomFormat && !doc.sbomVersion) {
+    errors.push('SBOM missing spdxVersion, bomFormat, or sbomVersion field');
+  }
+  if (!doc.provenance || typeof doc.provenance !== 'object') {
+    errors.push('SBOM missing provenance metadata block');
+  } else {
+    if (!doc.provenance.generator) errors.push('provenance.generator is required');
+    if (!doc.provenance.commit) errors.push('provenance.commit is required');
+    if (!doc.provenance.checksum) errors.push('provenance.checksum is required');
+  }
+  const targets = Array.isArray(doc.targets) ? doc.targets : [];
+  const present = new Set(targets.map(t => (t && t.name) || t));
+  for (const required of SBOM_REQUIRED_TARGETS) {
+    if (!present.has(required)) {
+      errors.push(`SBOM missing required target: ${required}`);
+    }
+  }
+  for (const t of targets) {
+    if (!t || typeof t !== 'object') continue;
+    if (!Array.isArray(t.dependencies)) {
+      errors.push(`target "${t.name}" missing dependencies array`);
+    }
+    if (!t.checksum) {
+      errors.push(`target "${t.name}" missing checksum`);
+    }
+  }
+  return { ok: errors.length === 0, errors, doc, path: abs };
+}
+
+function summarizeSbom(sbom) {
+  if (!sbom || !sbom.doc) return null;
+  const doc = sbom.doc;
+  const targets = Array.isArray(doc.targets) ? doc.targets : [];
+  return {
+    path: path.relative(REPO_ROOT, sbom.path),
+    generator: doc.provenance?.generator || null,
+    commit: doc.provenance?.commit || null,
+    checksum: doc.provenance?.checksum || null,
+    targets: targets.map(t => ({
+      name: t.name,
+      checksum: t.checksum || null,
+      dependencyCount: Array.isArray(t.dependencies) ? t.dependencies.length : 0,
+    })),
+  };
+}
+
 // ── Migration metadata ───────────────────────────────────────────────────────
 function getMigrationMetadata() {
   const migrationsDir = path.join(REPO_ROOT, 'xconfess-backend', 'migrations');
@@ -233,7 +304,7 @@ function getFeatureFlags() {
 }
 
 // ── Report generation ─────────────────────────────────────────────────────────
-function generateMarkdown(opts, commits, categories, migrations, contractMeta, featureFlags) {
+function generateMarkdown(opts, commits, categories, migrations, contractMeta, featureFlags, sbom) {
   const lines = [];
   const now = new Date().toISOString().split('T')[0];
   const lastTag = getLastReleaseTag();
@@ -311,6 +382,26 @@ function generateMarkdown(opts, commits, categories, migrations, contractMeta, f
   }
   lines.push('');
 
+  // ── SBOM / provenance ─────────────────────────────────────────────────────
+  lines.push(`## 📦 SBOM & Provenance`);
+  if (sbom && sbom.doc) {
+    const summary = summarizeSbom(sbom);
+    lines.push(`Manifest: \`${summary.path}\``);
+    lines.push(`Generator: \`${summary.generator}\``);
+    lines.push(`Commit: \`${summary.commit}\``);
+    lines.push(`Checksum: \`${summary.checksum}\``);
+    lines.push('');
+    lines.push('Artifacts covered:');
+    for (const t of summary.targets) {
+      lines.push(`- \`${t.name}\` — ${t.dependencyCount} transitive dep(s), checksum \`${t.checksum}\``);
+    }
+    lines.push('');
+    lines.push('> Attach the SBOM artifact to the GitHub release alongside these notes.');
+  } else {
+    lines.push('_No SBOM manifest provided. Pass `--sbom <file>` to include provenance._');
+  }
+  lines.push('');
+
   // ── Features ──────────────────────────────────────────────────────────────
   if (categories.feat.length > 0) {
     lines.push(`## ✨ New Features`);
@@ -351,6 +442,7 @@ function generateMarkdown(opts, commits, categories, migrations, contractMeta, f
   lines.push('- [ ] Contract deployment manifest updated if contracts changed');
   lines.push('- [ ] Support team notified of any user-visible changes');
   lines.push('- [ ] Rollback procedure confirmed (see `docs/disaster-recovery-runbook.md`)');
+  lines.push('- [ ] SBOM artifact generated, validated, and attached to the release');
   if (categories.breaking.length > 0) {
     lines.push('- [ ] **BREAKING**: Customer notification sent before deploy');
     lines.push('- [ ] **BREAKING**: Integration documentation updated');
@@ -372,7 +464,7 @@ function generateMarkdown(opts, commits, categories, migrations, contractMeta, f
   return lines.join('\n');
 }
 
-function generateJson(opts, commits, categories, migrations, contractMeta, featureFlags) {
+function generateJson(opts, commits, categories, migrations, contractMeta, featureFlags, sbom) {
   return JSON.stringify({
     generated: new Date().toISOString(),
     from: opts.from,
@@ -390,11 +482,12 @@ function generateJson(opts, commits, categories, migrations, contractMeta, featu
     })),
     contracts: contractMeta,
     featureFlags,
+    sbom: summarizeSbom(sbom),
     hasUnreleased: getUnreleasedCommits().length > 0,
   }, null, 2);
 }
 
-function generateChecklist(opts, commits, categories, migrations, contractMeta, featureFlags) {
+function generateChecklist(opts, commits, categories, migrations, contractMeta, featureFlags, sbom) {
   const checks = [];
   const hasBreaking = categories.breaking.length > 0;
   const hasMigrations = migrations.length > 0;
@@ -428,6 +521,12 @@ function generateChecklist(opts, commits, categories, migrations, contractMeta, 
   if (featureFlags.length > 0) {
     checks.push(`[ ] Feature flags verified for target environment: ${featureFlags.join(', ')}`);
   }
+  if (sbom && sbom.doc) {
+    checks.push(`[ ] SBOM validated (${summarizeSbom(sbom).targets.length} target(s))`);
+    checks.push('[ ] SBOM artifact attached to release');
+  } else {
+    checks.push('[!] SBOM missing — pass --sbom <file> before shipping');
+  }
   if (hasUnreleased) {
     checks.push('[!] Unreleased commits detected — create a release tag before shipping');
   }
@@ -448,17 +547,27 @@ function main() {
   const contractMeta = getContractMetadata();
   const featureFlags = getFeatureFlags();
 
+  let sbom = null;
+  if (opts.sbom) {
+    sbom = validateSbom(opts.sbom);
+    if (!sbom.ok) {
+      console.error('FAIL: SBOM provenance validation failed:');
+      for (const err of sbom.errors) console.error(`  - ${err}`);
+      process.exit(1);
+    }
+  }
+
   let output;
   switch (opts.format) {
     case 'json':
-      output = generateJson(opts, commits, categories, migrations, contractMeta, featureFlags);
+      output = generateJson(opts, commits, categories, migrations, contractMeta, featureFlags, sbom);
       break;
     case 'checklist':
-      output = generateChecklist(opts, commits, categories, migrations, contractMeta, featureFlags);
+      output = generateChecklist(opts, commits, categories, migrations, contractMeta, featureFlags, sbom);
       break;
     case 'markdown':
     default:
-      output = generateMarkdown(opts, commits, categories, migrations, contractMeta, featureFlags);
+      output = generateMarkdown(opts, commits, categories, migrations, contractMeta, featureFlags, sbom);
       break;
   }
 

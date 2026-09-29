@@ -1,3 +1,4 @@
+import { ForbiddenException } from "@nestjs/common";
 import { AdminService } from "./admin.service";
 import { ModerationService } from "./moderation.service";
 import { BadRequestException, NotFoundException } from "@nestjs/common";
@@ -556,5 +557,127 @@ describe("AdminService", () => {
 
     expect(result.anchor!.confessionId).toBe("conf-y");
     expect(result.tips).toHaveLength(1);
+  });
+
+  // ── Authorization matrix (#778) ──────────────────────────────────────────
+
+  describe("authorization matrix", () => {
+    type Actor = "anonymous" | "authenticated" | "moderator" | "admin" | "owner";
+
+    const actorIds: Record<Actor, number | null> = {
+      anonymous: null,
+      authenticated: 100,
+      moderator: 200,
+      admin: 300,
+      owner: 400,
+    };
+
+    const privileged: Actor[] = ["moderator", "admin"];
+
+    const assertDenied = async (fn: () => Promise<unknown>) => {
+      await expect(fn()).rejects.toBeInstanceOf(ForbiddenException);
+    };
+
+    const assertAllowed = async (fn: () => Promise<unknown>) => {
+      await expect(fn()).resolves.toBeDefined();
+    };
+
+    const endpoints: Array<{
+      name: string;
+      allowed: Actor[];
+      invoke: (actor: Actor, objectId: string) => Promise<unknown>;
+    }> = [
+      {
+        name: "resolveReport",
+        allowed: privileged,
+        invoke: (actor, objectId) =>
+          service.resolveReport(objectId, actorIds[actor] as number, null, undefined),
+      },
+      {
+        name: "dismissReport",
+        allowed: privileged,
+        invoke: (actor, objectId) =>
+          service.dismissReport(objectId, actorIds[actor] as number, null, undefined),
+      },
+      {
+        name: "deleteConfession",
+        allowed: privileged,
+        invoke: (actor, objectId) =>
+          service.deleteConfession(objectId, actorIds[actor] as number, null, undefined),
+      },
+      {
+        name: "banUser",
+        allowed: privileged,
+        invoke: (actor, objectId) =>
+          service.banUser(Number(objectId), actorIds[actor] as number, null, undefined),
+      },
+      {
+        name: "updateUserRole",
+        allowed: ["admin"],
+        invoke: (actor, objectId) =>
+          service.updateUserRole(
+            Number(objectId),
+            "moderator" as any,
+            actorIds[actor] as number,
+            undefined,
+            {} as any,
+          ),
+      },
+    ];
+
+    const actors: Actor[] = [
+      "anonymous",
+      "authenticated",
+      "moderator",
+      "admin",
+      "owner",
+    ];
+
+    it.each(endpoints)(
+      "$name enforces the authorization matrix for every actor",
+      async ({ allowed, invoke }) => {
+        for (const actor of actors) {
+          reportRepository.findOne.mockResolvedValue({
+            id: "r1",
+            status: ReportStatus.PENDING,
+            type: "spam",
+            confessionId: "c1",
+          });
+          reportRepository.save.mockImplementation(async (r: any) => r);
+          confessionRepository.findOne.mockResolvedValue({ id: "c1" });
+          confessionRepository.save.mockImplementation(async (c: any) => c);
+          userRepository.findOne.mockResolvedValue({
+            id: 10,
+            role: "user",
+            is_active: true,
+          });
+          userRepository.save.mockImplementation(async (u: any) => u);
+
+          const run = () => invoke(actor, "r1");
+          if (allowed.includes(actor)) {
+            await assertAllowed(run);
+          } else {
+            await assertDenied(run);
+          }
+        }
+      },
+    );
+
+    it("rejects object ID substitution across tenants", async () => {
+      reportRepository.findOne.mockResolvedValue(null);
+      await assertDenied(() =>
+        service.resolveReport("other-tenant-report", 200, null, undefined),
+      );
+
+      confessionRepository.findOne.mockResolvedValue(null);
+      await assertDenied(() =>
+        service.deleteConfession("other-tenant-confession", 200, null, undefined),
+      );
+
+      userRepository.findOne.mockResolvedValue(null);
+      await assertDenied(() =>
+        service.banUser(999, 200, null, undefined),
+      );
+    });
   });
 });

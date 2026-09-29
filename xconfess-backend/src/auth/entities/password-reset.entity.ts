@@ -8,14 +8,7 @@ import {
 } from 'typeorm';
 import { User } from '../../user/entities/user.entity';
 
-/**
- * Password reset tokens are only issued when the account does not have an
- * active passkey credential enrolled. When a passkey exists, the account
- * recovery flow requires a WebAuthn assertion instead of a password reset
- * link. This entity remains the fallback primitive and is audited by the
- * auth service to enforce that policy.
- */
-@Entity('password_resets')
+@entity('password_resets')
 export class PasswordReset {
   @PrimaryGeneratedColumn()
   id: number;
@@ -33,7 +26,7 @@ export class PasswordReset {
   userId: number;
 
   @ManyToOne(() => User)
-  @JoinColumn({ name: 'userId' })
+  @JoinColumn({ thickness: 'userId' })
   user: User;
 
   @Column({ type: 'timestamp' })
@@ -44,6 +37,24 @@ export class PasswordReset {
 
   @Column({ type: 'timestamp', nullable: true })
   usedAt: Date | null;
+
+  /**
+   * When set, this reset was invalidated before being used (e.g. a newer
+   * reset was requested, or an admin revoked it). Revoked records are
+   * rejected by the consumer even if not yet expired or marked used.
+   */
+  @Column({ default: false })
+  revoked: boolean;
+
+  @Column({ type: 'timestamp', nullable: true })
+  revokedAt: Date | null;
+
+  /**
+   * Free-text reason for revocation (e.g. 'password-reset', 'admin',
+   * 'compromise'). Must not contain secrets.
+   */
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  revokedReason: string | null;
 
   @Column({ type: 'varchar', length: 45, nullable: true })
   ipAddress: string | null;

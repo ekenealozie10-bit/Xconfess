@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # scripts/artifact-secret-scan.sh
-# Secret scanning for pull requests, release artifacts, and build outputs.
+# Secret scanning for pull requests, release artifacts, build outputs, and SBOM provenance.
 #
 # Complements scripts/secret-scanning-preflight.sh (which scans source files)
 # by also scanning compiled build artifacts, PR diff output, and release bundles.
@@ -15,12 +15,14 @@
 #   artifacts   Scan build artifacts and bundles only
 #   diff        Scan only the current git diff (for PR checks)
 #   source      Delegate to secret-scanning-preflight.sh (source files only)
+#   provenance  Validate SBOM/provenance metadata integrity (no secret scan)
 #
 # Options:
 #   --artifact-dir <dir>   Additional directory to scan for artifacts
 #   --baseline <file>      Allowlist file (default: .secret-scan-baseline.json)
 #   --report-dir <dir>     Evidence directory (default: secret-scan-results)
 #   --fail-on-warning      Treat allowlisted findings as failures too
+#   --sbom-dir <dir>       Directory containing SBOM artifacts (default: sbom)
 #
 # Exit codes:
 #   0  No unallowlisted secrets found
@@ -31,6 +33,7 @@
 #   - Known-safe fixtures are allowlisted narrowly (by file + line range)
 #   - New secrets block release (exit 1)
 #   - Findings include remediation steps without echoing values
+#   - SBOM/provenance metadata is present, well-formed, and checksummed
 #
 # NOTE: This scanner does NOT print matched secret values — it prints file path,
 #       line number, pattern name, and remediation guidance only.
@@ -46,6 +49,7 @@ ARTIFACT_DIR=""
 BASELINE_FILE="${REPO_ROOT}/.secret-scan-baseline.json"
 REPORT_DIR="${REPO_ROOT}/secret-scan-results"
 FAIL_ON_WARNING=false
+SBOM_DIR="${REPO_ROOT}/sbom"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -54,6 +58,7 @@ while [[ $# -gt 0 ]]; do
     --baseline)     BASELINE_FILE="${2:-}";      shift 2 ;;
     --report-dir)   REPORT_DIR="${2:-}";         shift 2 ;;
     --fail-on-warning) FAIL_ON_WARNING=true;     shift ;;
+    --sbom-dir)     SBOM_DIR="${2:-}";           shift 2 ;;
     -h|--help)
       head -40 "${BASH_SOURCE[0]}" | grep '^#' | sed 's/^# \?//'
       exit 0
@@ -81,6 +86,7 @@ log_info()    { echo -e "${CYAN}ℹ${NC} $1"; }
 
 FINDINGS=0
 ALLOWLISTED=0
+GAPS=()
 
 mkdir -p "${REPORT_DIR}"
 REPORT_FILE="${REPORT_DIR}/scan-$(date +%Y%m%dT%H%M%S).txt"
@@ -91,6 +97,7 @@ echo "=============================="
 echo "Date:     $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "Mode:     ${MODE}"
 echo "Report:   ${REPORT_FILE}"
+echo "SBOM dir: ${SBOM_DIR}"
 echo ""
 
 # ── Secret patterns (shared with preflight, kept in sync) ────────────────────
@@ -319,6 +326,89 @@ scan_source() {
   fi
 }
 
+# ── SBOM / provenance validation ─────────────────────────────────────────────
+# Validates that SBOM artifacts exist for each required target, are well-formed
+# JSON, declare a spec version, and have a matching checksum sidecar. Missing or
+# malformed provenance metadata is a blocking finding (issue #133).
+REQUIRED_SBOM_TARGETS=(backend frontend contracts container)
+
+validate_sbom_file() {
+  local target="$1"
+  local sbom_file="${SBOM_DIR}/${target}.sbom.json"
+  local checksum_file="${sbom_file}.sha256"
+
+  if [[ ! -f "${sbom_file}" ]]; then
+    log_fail "SBOM missing for target '${target}' (expected ${sbom_file#${REPO_ROOT}/})"
+    echo "  Remediation: run 'npm run sbom:generate' in CI before release; ensure the ${target} build job uploads its SBOM artifact."
+    ((FINDINGS++)) || true
+    return
+  fi
+
+  if ! command -v node &>/dev/null; then
+    log_warn "node not available — cannot validate SBOM JSON for '${target}'"
+    GAPS+=("SBOM JSON validation skipped for ${target} — node unavailable")
+    return
+  fi
+
+  local parse_err
+  parse_err=$(node -e "
+    const fs = require('fs');
+    try {
+      const doc = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+      const spec = doc.spdxVersion || doc.bomFormat || doc.schemaVersion;
+      if (!spec) { throw new Error('missing spec version (spdxVersion/bomFormat/schemaVersion)'); }
+      const comps = doc.components || doc.packages || [];
+      if (!Array.isArray(comps) || comps.length === 0) { throw new Error('no components/packages declared'); }
+      const hasTransitive = comps.some(c => c && (c.dependencies || c.relationship || c.scope === 'transitive' || c.relationshipType));
+      if (!hasTransitive) { throw new Error('no transitive dependency metadata found'); }
+    } catch (err) {
+      process.stderr.write(err.message);
+      process.exit(1);
+    }
+  " "${sbom_file}" 2>&1 || true)
+
+  if [[ -n "${parse_err}" ]]; then
+    log_fail "SBOM malformed for target '${target}': ${parse_err}"
+    echo "  Remediation: regenerate SBOM with 'npm run sbom:generate'; ensure the generator emits spec version, components, and transitive relationships."
+    ((FINDINGS++)) || true
+    return
+  fi
+
+  if [[ ! -f "${checksum_file}" ]]; then
+    log_fail "SBOM checksum missing for target '${target}' (expected ${checksum_file#${REPO_ROOT}/})"
+    echo "  Remediation: run 'sha256sum ${sbom_file#${REPO_ROOT}/} > ${checksum_file#${REPO_ROOT}/}' in the release job and commit the sidecar."
+    ((FINDINGS++)) || true
+    return
+  fi
+
+  local expected actual
+  expected=$(awk '{print $1}' "${checksum_file}" | head -n1)
+  actual=$(sha256sum "${sbom_file}" | awk '{print $1}')
+  if [[ -z "${expected}" || "${expected}" != "${actual}" ]]; then
+    log_fail "SBOM checksum mismatch for target '${target}'"
+    echo "  Remediation: regenerate the SBOM and its .sha256 sidecar together; do not hand-edit either file."
+    ((FINDINGS++)) || true
+    return
+  fi
+
+  log_pass "SBOM OK: ${sbom_file#${REPO_ROOT}/} (checksum verified)"
+}
+
+scan_provenance() {
+  log_section "Validating SBOM / provenance metadata"
+
+  if [[ ! -d "${SBOM_DIR}" ]]; then
+    log_fail "SBOM directory not found: ${SBOM_DIR#${REPO_ROOT}/}"
+    echo "  Remediation: run 'npm run sbom:generate' in CI and publish artifacts to ${SBOM_DIR#${REPO_ROOT}/}."
+    ((FINDINGS++)) || true
+    return
+  fi
+
+  for target in "${REQUIRED_SBOM_TARGETS[@]}"; do
+    validate_sbom_file "${target}"
+  done
+}
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 load_allowlist
 
@@ -327,6 +417,7 @@ case "${MODE}" in
     scan_source
     scan_artifacts
     scan_diff
+    scan_provenance
     ;;
   artifacts)
     scan_artifacts
@@ -336,6 +427,9 @@ case "${MODE}" in
     ;;
   source)
     scan_source
+    ;;
+  provenance)
+    scan_provenance
     ;;
   *)
     echo "Unknown mode: ${MODE}" >&2
@@ -348,6 +442,9 @@ log_section "Scan Results"
 echo "Blocking findings:  ${FINDINGS}"
 echo "Allowlisted:        ${ALLOWLISTED}"
 echo "Report:             ${REPORT_FILE}"
+if [[ ${#GAPS[@]} -gt 0 ]]; then
+  echo "Gaps:               ${#GAPS[@]} (see below)"
+fi
 echo ""
 
 if [[ ${FINDINGS} -gt 0 ]]; then
@@ -358,6 +455,14 @@ if [[ ${FINDINGS} -gt 0 ]]; then
   echo ""
   echo "Do NOT add real secrets to the allowlist — only fixture/test/placeholder values."
   exit 1
+fi
+
+if [[ ${#GAPS[@]} -gt 0 ]]; then
+  echo -e "${YELLOW}Scan completed with ${#GAPS[@]} gap(s):${NC}"
+  for gap in "${GAPS[@]}"; do
+    echo "  - ${gap}"
+  done
+  echo ""
 fi
 
 log_pass "No unallowlisted secrets found."

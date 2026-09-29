@@ -1,10 +1,13 @@
-import { IsOptional, IsString, MinLength, MaxLength, ValidateIf } from 'class-validator';
+import { IsOptional, IsString, MinLength, MaxLength, ValidateIF } from 'class-validator';
 
 /**
- * Payload for {@link AuthController.stepUp}. Exactly one of `password`,
- * `totpToken`, or `webAuthnAssertion` should be supplied to re-prove control of the account.
- * Password and TOTP are legacy fallbacks; passkey assertion is the preferred,
- * phishing-resistant mechanism.
+ * Payload for {@link AuthController.stepUp}. Exactly one of `password` or
+ * `totpToken` should be supplied to re-prove control of the account.
+ *
+ * This guard is reused by the account merge / anonymous identity transfer
+ * workflow. Merge attempts must be authorized with a step-up proof, so the
+ * same constraints apply: exactly one credential field must be present and
+ * non-empty.
  */
 export class StepUpDto {
   @IsOptional()
@@ -13,8 +16,8 @@ export class StepUpDto {
   password?: string;
 
   @IsOptional()
-  @IsString({ message: 'TOTP token must be a string' })
-  @MinLength(6, { message: 'TOTP token must be 6 digits' })
+  @IsString({ message: 'TOTP must be a string' })
+  @MinLength(6, { message: 'TOTP must be 6 digits' })
   @MaxLength(10, { message: 'TOTP token is too long' })
   totpToken?: string;
 

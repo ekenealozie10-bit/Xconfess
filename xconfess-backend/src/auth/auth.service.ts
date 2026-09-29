@@ -1,1 +1,756 @@
-77u/aW1wb3J0IHsgbWFza1VzZXJJZCB9IGZyb20gJy4uL3V0aWxzL21hc2stdXNlci1pZCc7CmltcG9ydCB7CiAgSW5qZWN0YWJsZSwKICBVbmF1dGhvcml6ZWRFeGNlcHRpb24sCiAgQmFkUmVxdWVzdEV4Y2VwdGlvbiwKICBHb25lRXhjZXB0aW9uLAogIFVucHJvY2Vzc2FibGVFbnRpdHlFeGNlcHRpb24sCiAgTG9nZ2VyLAogIE9wdGlvbmFsLAp9IGZyb20gJ0BuZXN0anMvY29tbW9uJzsKaW1wb3J0IHsgSnd0U2VydmljZSB9IGZyb20gJ0BuZXN0anMvand0JzsKaW1wb3J0IHsgVXNlclNlcnZpY2UgfSBmcm9tICcuLi91c2VyL3VzZXIuc2VydmljZSc7CmltcG9ydCB7IEVtYWlsU2VydmljZSB9IGZyb20gJy4uL2VtYWlsL2VtYWlsLnNlcnZpY2UnOwppbXBvcnQgeyBQYXNzd29yZFJlc2V0U2VydmljZSB9IGZyb20gJy4vcGFzc3dvcmQtcmVzZXQuc2VydmljZSc7CmltcG9ydCB7IEFub255bW91c1VzZXJTZXJ2aWNlIH0gZnJvbSAnLi4vdXNlci9hbm9ueW1vdXMtdXNlci5zZXJ2aWNlJzsKaW1wb3J0IHsgTG9ja291dFNlcnZpY2UgfSBmcm9tICcuL2xvY2tvdXQuc2VydmljZSc7CmltcG9ydCAqIGFzIGJjcnlwdCBmcm9tICdiY3J5cHRqcyc7CmltcG9ydCAqIGFzIGNyeXB0byBmcm9tICdjcnlwdG8nOwppbXBvcnQgeyBVc2VyUmVzcG9uc2UgfSBmcm9tICcuLi91c2VyL2R0by91c2VyLXJlc3BvbnNlLmR0byc7CmltcG9ydCB7IEZvcmdvdFBhc3N3b3JkRHRvIH0gZnJvbSAnLi9kdG8vZm9yZ290LXBhc3N3b3JkLmR0byc7CmltcG9ydCB7IENyeXB0b1V0aWwgfSBmcm9tICcuLi9jb21tb24vY3J5cHRvLnV0aWwnOwppbXBvcnQgeyBKd3RQYXlsb2FkIH0gZnJvbSAnLi9pbnRlcmZhY2VzL2p3dC1wYXlsb2FkLmludGVyZmFjZSc7CmltcG9ydCB7IFVzZXJSb2xlIH0gZnJvbSAnLi4vdXNlci9lbnRpdGllcy91c2VyLmVudGl0eSc7CmltcG9ydCB7IEFwcEV4Y2VwdGlvbiB9IGZyb20gJy4uL2NvbW1vbi9lcnJvcnMvYXBwLWV4Y2VwdGlvbic7CmltcG9ydCB7IEVycm9yQ29kZSB9IGZyb20gJy4uL2NvbW1vbi9lcnJvcnMvZXJyb3ItY29kZXMnOwppbXBvcnQgeyBIdHRwU3RhdHVzIH0gZnJvbSAnQG5lc3Rqcy9jb21tb24nOwppbXBvcnQgeyBnZXREZWZhdWx0QWRtaW5TdGVsbGFySW52b2NhdGlvblNjb3BlcyB9IGZyb20gJy4uL3N0ZWxsYXIvc3RlbGxhci1pbnZvY2F0aW9uLXBvbGljeSc7CmltcG9ydCB7IEFuYWx5dGljc0V2ZW50U2VydmljZSB9IGZyb20gJy4uL2FuYWx5dGljcy9hbmFseXRpY3MtZXZlbnQuc2VydmljZSc7CmltcG9ydCB7IFBhc3NrZXlTZXJ2aWNlIH0gZnJvbSAnLi9wYXNza2V5LnNlcnZpY2UnOwppbXBvcnQgewogIFBhc3NrZXlSZWdpc3RyYXRpb25WZXJpZmljYXRpb25EaWcsCiAgUGFzc2tleUF1dGhlbnRpY2F0aW9uVmVyaWZpY2F0aW9uRGlnLAp9IGZyb20gJy4vZHRvL3Bhc3NrZXkuZHRvJzsKCi8qKgogKiBBdXRoZW50aWNhdGlvbiBzZXJ2aWNlIGhhbmRsaW5nIHBhc3N3b3JkIGFuZCBwYXNza2V5IChXZWJBdXRobikgZmxvd3MuCiAqCiAqIFBhc3NrZXkgZmxvd3MgZGVsZWdhdGUgY2hhbGxlbmdlIGdlbmVyYXRpb24sIG9yaWdpbi9SUCBJRCB2ZXJpZmljYXRpb24sCiAqIGNvdW50ZXIvcmVwbGF5IGNoZWNrcywgYW5kIGNyZWRlbnRpYWwgbGlmZWN5Y2xlIHRvIFBhc3NrZXlTZXJ2aWNlLiBUaGlzCiAqIHNlcnZpY2Ugb3ducyB0aGUgYXV0aGVudGljYXRpb24gYm91bmRhcnk6IGlzc3VpbmcgSldUcyBhbmQgZW5mb3JjaW5nCiAqIGZhbGxiYWNrIHBvbGljeSAocGFzc2tleS1yZXF1aXJlZCBhY2NvdW50cyBjYW5ub3QgZmFsbCBiYWNrIHRvIHBhc3N3b3JkKS4KICovCkBJbmplY3RhYmxlKCkKZXhwb3J0IGNsYXNzIEF1dGhTZXJ2aWNlIHsKICBwcml2YXRlIHJlYWRvbmx5IGxvZ2dlciA9IG5ldyBMb2dnZXIoQXV0aFNlcnZpY2UubmFtZSk7CgogIGNvbnN0cnVjdG9yKAogICAgcHJpdmF0ZSB1c2VyU2VydmljZTogVXNlclNlcnZpY2UsCiAgICBwcml2YXRlIGp3dFNlcnZpY2U6IEp3dFNlcnZpY2UsCiAgICBwcml2YXRlIGVtYWlsU2VydmljZTogRW1haWxTZXJ2aWNlLAogICAgcHJpdmF0ZSBwYXNzd29yZFJlc2V0U2VydmljZTogUGFzc3dvcmRSZXNldFNlcnZpY2UsCiAgICBwcml2YXRlIGFub255bW91c1VzZXJTZXJ2aWNlOiBBbm9ueW1vdXNVc2VyU2VydmljZSwKICAgIHByaXZhdGUgbG9ja291dFNlcnZpY2U6IExvY2tvdXRTZXJ2aWNlLAogICAgQE9wdGlvbmFsKCkKICAgIHByaXZhdGUgcmVhZG9ubHkgYW5hbHl0aWNzRXZlbnRTZXJ2aWNlPzogQW5hbHl0aWNzRXZlbnRTZXJ2aWNlLAogICAgQE9wdGlvbmFsKCkKICAgIHByaXZhdGUgcmVhZG9ubHkgcGFzc2tleVNlcnZpY2U/OiBQYXNza2V5U2VydmljZSwKICApIHt9CgogIGFzeW5jIHZhbGlkYXRlVXNlcigKICAgIGVtYWlsOiBzdHJpbmcsCiAgICBwYXNzd29yZDogc3RyaW5nLAogICk6IFByb21pc2U8VXNlclJlc3BvbnNlIHwgbnVsbD4gewogICAgY29uc3QgdXNlciA9IGF3YWl0IHRoaXMudXNlclNlcnZpY2UuZmluZEJ5RW1haWwoZW1haWwpOwogICAgaWYgKHVzZXIgJiYgKGF3YWl0IGJjcnlwdC5jb21wYXJlKHBhc3N3b3JkLCB1c2VyLnBhc3N3b3JkKSkpIHsKICAgICAgaWYgKCF1c2VyLmlzX2FjdGl2ZSkgewogICAgICAgIHRocm93IG5ldyBBcHBFeGNlcHRpb24oCiAgICAgICAgICAnQWNjb3VudCBpcyBkZWFjdGl2YXRlZC4gUGxlYXNlIHJlYWN0aXZhdGUgeW91ciBhY2NvdW50IHRvIGNvbnRpbnVlLicsCiAgICAgICAgICBFcnJvckNvZGUuQVVUSF9BQ0NPVU5UX0RFQUNUSVZBVEVELAogICAgICAgICAgSHR0cFN0YXR1cy5VTkFVVEhPUklaRUQsCiAgICAgICAgKTsKICAgICAgfQogICAgICBjb25zdCBkZWNyeXB0ZWRFbWFpbCA9IENyeXB0b1V0aWwuZGVjcnlwdCgKICAgICAgICB1c2VyLmVtYWlsRW5jcnlwdGVkLAogICAgICAgIHVzZXIuZW1haWxJdiwKICAgICAgICB1c2VyLmVtYWlsVGFnLAogICAgICApOwogICAgICAvLyByZXNldFBhc3N3b3JkVG9rZW4gYW5kIHJlc2V0UGFzc3dvcmRFeHBpcmVzIGFyZSBpbnRlcm5hbCDigJQgbmV2ZXIgc2VudCB0byBjbGllbnRzLgogICAgICByZXR1cm4gewogICAgICAgIGlkOiB1c2VyLmlkLAogICAgICAgIHVzZXJuYW1lOiB1c2VyLnVzZXJuYW1lLAogICAgICAgIHJvbGU6IHVzZXIucm9sZSwKICAgICAgICBpc19hY3RpdmU6IHVzZXIuaXNfYWN0aXZlLAogICAgICAgIGVtYWlsOiBkZWNyeXB0ZWRFbWFpbCwKICAgICAgICBub3RpZmljYXRpb25QcmVmZXJlbmNlczogdXNlci5ub3RpZmljYXRpb25QcmVmZXJlbmNlcyB8fCB7fSwKICAgICAgICBwcml2YWN5OiB7CiAgICAgICAgICBpc0Rpc2NvdmVyYWJsZTogdXNlci5pc0Rpc2NvdmVyYWJsZSgpLAogICAgICAgICAgY2FuUmVjZWl2ZVJlcGxpZXM6IHVzZXIuY2FuUmVjZWl2ZVJlcGxpZXMoKSwKICAgICAgICAgIHNob3dSZWFjdGlvbnM6IHVzZXIuc2hvdWxkU2hvd1JlYWN0aW9ucygpLAogICAgICAgICAgZGF0YVByb2Nlc3NpbmdDb25zZW50OiB1c2VyLmhhc0RhdGFQcm9jZXNzaW5nQ29uc2VudCgpLAogICAgICAgIH0sCiAgICAgICAgY3JlYXRlZEF0OiB1c2VyLmNyZWF0ZWRBdCwKICAgICAgICB1cGRhdGVkQXQ6IHVzZXIudXBkYXRlZEF0LAogICAgICB9OwogICAgfQogICAgcmV0dXJuIG51bGw7CiAgfQoKICBhc3luYyBsb2dpbigKICAgIGVtYWlsOiBzdHJpbmcsCiAgICBwYXNzd29yZDogc3RyaW5nLAogICk6IFByb21pc2U8ewogICAgYWNjZXNzX3Rva2VuOiBzdHJpbmc7CiAgICB1c2VyOiBVc2VyUmVzcG9uc2U7CiAgICBhbm9ueW1vdXNVc2VySWQ6IHN0cmluZzsKICB9PiB7CiAgICAvLyBDaGVjayBsb2Nrb3V0IGJlZm9yZSB2YWxpZGF0aW5nIGNyZWRlbnRpYWxzCiAgICBjb25zdCBsb2NrU3RhdHVzID0gYXdhaXQgdGhpcy5sb2Nrb3V0U2VydmljZS5nZXRTdGF0dXMoZW1haWwpOwogICAgaWYgKGxvY2tTdGF0dXMuaXNMb2NrZWQpIHsKICAgICAgdGhyb3cgbmV3IEFwcEV4Y2VwdGlvbigKICAgICAgICAnVG9vIG1hbnkgZmFpbGVkIGxvZ2luIGF0dGVtcHRzLiBQbGVhc2UgdHJ5IGFnYWluIGxhdGVyLicsCiAgICAgICAgRXJyb3JDb2RlLkFVVEhfSU5WQUxJRF9DUkVERU5USUFMUywKICAgICAgICBIdHRwU3RhdHVzLlVOQVVUSE9SSVpFRCwKICAgICAgKTsKICAgIH0KCiAgICAvLyBGYWxsYmFjayBwb2xpY3k6IGFjY291bnRzIHRoYXQgcmVxdWlyZSBwYXNza2V5cyBjYW5ub3QgdXNlIHBhc3N3b3JkIGxvZ2luLgogICAgY29uc3QgYWNjb3VudCA9IGF3YWl0IHRoaXMudXNlclNlcnZpY2UuZmluZEJ5RW1haWwoZW1haWwpOwogICAgaWYgKGFjY291bnQgJiYgdGhpcy5wYXNza2V5U2VydmljZSkgewogICAgICBjb25zdCByZXF1aXJlZCA9IGF3YWl0IHRoaXMucGFzc2tleVNlcnZpY2UuaXNQYXNza2V5UmVxdWlyZWQoYWNjb3VudC5pZCk7CiAgICAgIGlmIChyZXF1aXJlZCkgewogICAgICAgIHRoaXMubG9nZ2VyLndhcm4oCiAgICAgICAgICAnUGFzc3dvcmQgbG9naW4gcmVqZWN0ZWQgZm9yIHBhc3NrZXktcmVxdWlyZWQgYWNjb3VudCcsCiAgICAgICAgICB7IG1hc2tlZFVzZXJJZDogbWFza1VzZXJJZChhY2NvdW50LmlkKSB9LAogICAgICAgICk7CiAgICAgICAgdGhyb3cgbmV3IEFwcEV4Y2VwdGlvbigKICAgICAgICAgICdUaGlzIGFjY291bnQgcmVxdWlyZXMgcGFzc2tleSBhdXRoZW50aWNhdGlvbi4nLAogICAgICAgICAgRXJyb3JDb2RlLkFVVEhfUEFTU0tFWV9SRVFVSVJFRCwKICAgICAgICAgIEh0dHBTdGF0dXMuVU5BVVRIT1JJWkVELAogICAgICAgICk7CiAgICAgIH0KICAgIH0KCiAgICBjb25zdCB1c2VyID0gYXdhaXQgdGhpcy52YWxpZGF0ZVVzZXIoZW1haWwsIHBhc3N3b3JkKTsKICAgIGlmICghdXNlcikgewogICAgICBhd2FpdCB0aGlzLmxvY2tvdXRTZXJ2aWNlLnJlY29yZEZhaWxlZEF0dGVtcHQoZW1haWwpOwogICAgICB0aHJvdyBuZXcgQXBwRXhjZXB0aW9uKAogICAgICAgICdJbnZhbGlkIGNyZWRlbnRpYWxzJywKICAgICAgICBFcnJvckNvZGUuQVVUSF9JTlZBTElEX0NSRURFTlRJQUxTLAogICAgICAgIEh0dHBTdGF0dXMuVU5BVVRIT1JJWkVELAogICAgICApOwogICAgfQogICAgYXdhaXQgdGhpcy5sb2Nrb3V0U2VydmljZS5jbGVhckxvY2tvdXQoZW1haWwpOwogICAgcmV0dXJuIHRoaXMuaXNzdWVTZXNzaW9uKHVzZXIsICdwYXNzd29yZCcpOwogIH0KCiAgLyoqCiAgICogQmVnaW4gYSBXZWJBdXRobiByZWdpc3RyYXRpb24gY2VyZW1vbnkgZm9yIGFuIGF1dGhlbnRpY2F0ZWQgdXNlci4KICAgKi8KICBhc3luYyBiZWdpblBhc3NrZXlSZWdpc3RyYXRpb24odXNlcklkOiBudW1iZXIpIHsKICAgIHRoaXMuZW5zdXJlUGFzc2tleVNlcnZpY2UoKTsKICAgIGNvbnN0IHVzZXIgPSBhd2FpdCB0aGlzLnVzZXJTZXJ2aWNlLmZpbmRCeUlkKHVzZXJJZCk7CiAgICBpZiAoIXVzZXIgfHwgIXVzZXIuaXNfYWN0aXZlKSB7CiAgICAgIHRocm93IG5ldyBBcHBFeGNlcHRpb24oCiAgICAgICAgJ0FjY291bnQgbm90IGF2YWlsYWJsZSBmb3IgcGFzc2tleSByZWdpc3RyYXRpb24nLAogICAgICAgIEVycm9yQ29kZS5OT1RfRk9VTkQsCiAgICAgICAgSHR0cFN0YXR1cy5OT1RfRk9VTkQsCiAgICAgICk7CiAgICB9CiAgICByZXR1cm4gdGhpcy5wYXNza2V5U2VydmljZSEuYmVnaW5SZWdpc3RyYXRpb24odXNlcik7CiAgfQoKICAvKioKICAgKiBDb21wbGV0ZSBhIFdlYkF1dGhuIHJlZ2lzdHJhdGlvbiBjZXJlbW9ueS4gT3JpZ2luIGFuZCBSUCBJRCBhcmUKICAgKiB2ZXJpZmllZCBpbnNpZGUgUGFzc2tleVNlcnZpY2UgYmVmb3JlIHRoZSBjcmVkZW50aWFsIGlzIHBlcnNpc3RlZC4KICAgKi8KICBhc3luYyBjb21wbGV0ZVBhc3NrZXlSZWdpc3RyYXRpb24oCiAgICB1c2VySWQ6IG51bWJlciwKICAgIGJvZHk6IFBhc3NrZXlSZWdpc3RyYXRpb25WZXJpZmljYXRpb25EaWcsCiAgKSB7CiAgICB0aGlzLmVuc3VyZVBhc3NrZXlTZXJ2aWNlKCk7CiAgICBjb25zdCB1c2VyID0gYXdhaXQgdGhpcy51c2VyU2VydmljZS5maW5kQnlJZCh1c2VySWQpOwogICAgaWYgKCF1c2VyIHx8ICF1c2VyLmlzX2FjdGl2ZSkgewogICAgICB0aHJvdyBuZXcgQXBwRXhjZXB0aW9uKAogICAgICAgICdBY2NvdW50IG5vdCBhdmFpbGFibGUgZm9yIHBhc3NrZXkgcmVnaXN0cmF0aW9uJywKICAgICAgICBFcnJvckNvZGUuTk9UX0ZPVU5ELAogICAgICAgIEh0dHBTdGF0dXMuTk9UX0ZPVU5ELAogICAgICApOwogICAgfQogICAgY29uc3QgY3JlZGVudGlhbCA9IGF3YWl0IHRoaXMucGFzc2tleVNlcnZpY2UhLmNvbXBsZXRlUmVnaXN0cmF0aW9uKAogICAgICB1c2VyLAogICAgICBib2R5LAogICAgKTsKICAgIHRoaXMubG9nZ2VyLmxvZygnUGFzc2tleSByZWdpc3RlcmVkJywgewogICAgICBtYXNrZWRVc2VySWQ6IG1hc2tVc2VySWQodXNlcklkKSwKICAgICAgY3JlZGVudGlhbElkOiBjcmVkZW50aWFsLmNyZWRlbnRpYWxJZCwKICAgIH0pOwogICAgcmV0dXJuIGNyZWRlbnRpYWw7CiAgfQoKICAvKioKICAgKiBCZWdpbiBhIFdlYkF1dGhuIGFzc2VydGlvbiBjZXJlbW9ueS4gV2hlbiBhbiBlbWFpbCBpcyBwcm92aWRlZCB0aGUKICAgKiBhbGxvd2VkIGNyZWRlbnRpYWxzIGFyZSByZXN0cmljdGVkIHRvIHRoYXQgYWNjb3VudC4KICAgKi8KICBhc3luYyBiZWdpblBhc3NrZXlBdXRoZW50aWNhdGlvbihlbWFpbD86IHN0cmluZykgewogICAgdGhpcy5lbnN1cmVQYXNza2V5U2VydmljZSgpOwogICAgbGV0IHVzZXJJZDogbnVtYmVyIHwgdW5kZWZpbmVkOwogICAgaWYgKGVtYWlsKSB7CiAgICAgIGNvbnN0IHVzZXIgPSBhd2FpdCB0aGlzLnVzZXJTZXJ2aWNlLmZpbmRCeUVtYWlsKGVtYWlsKTsKICAgICAgaWYgKHVzZXIgJiYgdXNlci5pc19hY3RpdmUpIHsKICAgICAgICB1c2VySWQgPSB1c2VyLmlkOwogICAgICB9CiAgICB9CiAgICByZXR1cm4gdGhpcy5wYXNza2V5U2VydmljZSEuYmVnaW5BdXRoZW50aWNhdGlvbih1c2VySWQpOwogIH0KCiAgLyoqCiAgICogQ29tcGxldGUgYSBXZWJBdXRobiBhc3NlcnRpb24gY2VyZW1vbnkuIFJlcGxheWVkIGFzc2VydGlvbnMgZmFpbAogICAqIGJlY2F1c2UgY2hhbGxlbmdlcyBhcmUgc2luZ2xlLXVzZSBhbmQgY291bnRlcnMgbXVzdCBpbmNyZWFzZS4KICAgKi8KICBhc3luYyBjb21wbGV0ZVBhc3NrZXlBdXRoZW50aWNhdGlvbigKICAgIGJvZHk6IFBhc3NrZXlBdXRoZW50aWNhdGlvblZlcmlmaWNhdGlvbkRpZywKICApOiBQcm9taXNlPHsKICAgIGFjY2Vzc190b2tlbjogc3RyaW5nOwogICAgdXNlcjogVXNlclJlc3BvbnNlOwogICAgYW5vbnltb3VzVXNlcklkOiBzdHJpbmc7CiAgfT4gewogICAgdGhpcy5lbnN1cmVQYXNza2V5U2VydmljZSgpOwogICAgY29uc3QgeyB1c2VySWQgfSA9IGF3YWl0IHRoaXMucGFzc2tleVNlcnZpY2UhLmNvbXBsZXRlQXV0aGVudGljYXRpb24oCiAgICAgIGJvZHksCiAgICApOwogICAgY29uc3QgdXNlciA9IGF3YWl0IHRoaXMudmFsaWRhdGVVc2VyQnlJZCh1c2VySWQpOwogICAgaWYgKCF1c2VyKSB7CiAgICAgIHRocm93IG5ldyBBcHBFeGNlcHRpb24oCiAgICAgICAgJ0FjY291bnQgbm90IGF2YWlsYWJsZScsCiAgICAgICAgRXJyb3JDb2RlLkFVVEhfQUNDT1VOVF9ERUFDVElWQVRFRCwKICAgICAgICBIdHRwU3RhdHVzLlVOQVVUSE9SSVpFRCwKICAgICAgKTsKICAgIH0KICAgIHJldHVybiB0aGlzLmlzc3VlU2Vzc2lvbih1c2VyLCAncGFzc2tleScpOwogIH0KCiAgLyoqCiAgICogTGlzdCB0aGUgY3JlZGVudGlhbHMgcmVnaXN0ZXJlZCBmb3IgYSB1c2VyIChzYWZlIG1ldGFkYXRhIG9ubHkpLgogICAqLwogIGFzeW5jIGxpc3RQYXNza2V5Q3JlZGVudGlhbHModXNlcklkOiBudW1iZXIpIHsKICAgIHRoaXMuZW5zdXJlUGFzc2tleVNlcnZpY2UoKTsKICAgIHJldHVybiB0aGlzLnBhc3NrZXlTZXJ2aWNlIS5saXN0Q3JlZGVudGlhbHModXNlcklkKTsKICB9CgogIC8qKgogICAqIFJldm9rZSBhIHBhc3NrZXkgY3JlZGVudGlhbC4gUmV2b2NhdGlvbiBpcyBhdXRob3JpemVkIGJ5IG93bmVyc2hpcC4KICAgKi8KICBhc3luYyByZXZva2VQYXNza2V5Q3JlZGVudGlhbCgKICAgIHVzZXJJZDogbnVtYmVyLAogICAgY3JlZGVudGlhbElkOiBzdHJpbmcsCiAgKSB7CiAgICB0aGlzLmVuc3VyZVBhc3NrZXlTZXJ2aWNlKCk7CiAgICBjb25zdCByZXN1bHQgPSBhd2FpdCB0aGlzLnBhc3NrZXlTZXJ2aWNlIS5yZXZva2VDcmVkZW50aWFsKAogICAgICB1c2VySWQsCiAgICAgIGNyZWRlbnRpYWxJZCwKICAgICk7CiAgICB0aGlzLmxvZ2dlci5sb2coJ1Bhc3NrZXkgY3JlZGVudGlhbCByZXZva2VkJywgewogICAgICBtYXNrZWRVc2VySWQ6IG1hc2tVc2VySWQodXNlcklkKSwKICAgICAgY3JlZGVudGlhbElkLAogICAgfSk7CiAgICByZXR1cm4gcmVzdWx0OwogIH0KCiAgLyoqCiAgICogVXBkYXRlIHRoZSBmYWxsYmFjayBwb2xpY3kgZm9yIGFuIGFjY291bnQuIFdoZW4gcGFzc2tleXMgYXJlIHJlcXVpcmVkCiAgICogdGhlIGFjY291bnQgbXVzdCBoYXZlIGF0IGxlYXN0IG9uZSByZWdpc3RlcmVkIGNyZWRlbnRpYWwuCiAgICovCiAgYXN5bmMgc2V0UGFzc2tleVJlcXVpcmVkKHVzZXJJZDogbnVtYmVyLCByZXF1aXJlZDogYm9vbGVhbikgewogICAgdGhpcy5lbnN1cmVQYXNza2V5U2VydmljZSgpOwogICAgaWYgKHJlcXVpcmVkKSB7CiAgICAgIGNvbnN0IGNyZWRlbnRpYWxzID0gYXdhaXQgdGhpcy5wYXNza2V5U2VydmljZSEubGlzdENyZWRlbnRpYWxzKHVzZXJJZCk7CiAgICAgIGlmIChjcmVkZW50aWFscy5sZW5ndGggPT09IDApIHsKICAgICAgICB0aHJvdyBuZXcgQXBwRXhjZXB0aW9uKAogICAgICAgICAgJ0Nhbm5vdCByZXF1aXJlIHBhc3NrZXlzIGJlZm9yZSBlbnJvbGxpbmcgYXQgbGVhc3Qgb25lIGNyZWRlbnRpYWwnLAogICAgICAgICAgRXJyb3RDb2RlLkJBUF9SRVFVRVNULAogICAgICAgICAgSHR0cFN0YXR1cy5CQURfUkVRVUVTVCwKICAgICAgICApOwogICAgICB9CiAgICB9CiAgICByZXR1cm4gdGhpcy5wYXNza2V5U2VydmljZSEuc2V0UGFzc2tleVJlcXVpcmVkKHVzZXJJZCwgcmVxdWlyZWQpOwogIH0KCiAgLyoqCiAgICogQWNjb3VudCByZWNvdmVyeSBpbnRlZ3JhdGlvbjogd2hlbiBhIHBhc3NrZXktcmVxdWlyZWQgdXNlciBsb3NlcyBhY2Nlc3MKICAgKiB0byBhbGwgY3JlZGVudGlhbHMsIGEgcmVjb3ZlcnkgdG9rZW4gbXVzdCBiZSBjb25zdW1lZCBiZWZvcmUgdGhlCiAgICogZmFsbGJhY2sgcG9saWN5IGlzIHJlbGF4ZWQuIFRoaXMgcHJldmVudHMgcGFzc3dvcmQtb25seSByZWNvdmVyeSBmcm9tCiAgICogc2lsZW50bHkgYnlwYXNzaW5nIHRoZSBzdHJvbmdlciBjcmVkZW50aWFsIHBvbGljeS4KICAgKi8KICBhc3luYyByZWNvdmVyUGFzc2tleUFjY2VzcygKICAgIHRva2VuOiBzdHJpbmcsCiAgICBuZXdQYXNzd29yZDogc3RyaW5nLAogICk6IFByb21pc2U8eyBtZXNzYWdlOiBzdHJpbmcgfT4gewogICAgdGhpcy5lbnN1cmVQYXNza2V5U2VydmljZSgpOwogICAgY29uc3QgeyByZXNldCwgcmVhc29uIH0gPQogICAgICBhd2FpdCB0aGlzLnBhc3N3b3JkUmVzZXRTZXJ2aWNlLmNvbnN1bWVWYWxpZFRva2VuKHRva2VuKTsKCiAgICBpZiAoIXJlc2V0KSB7CiAgICAgIHRoaXMubG9nZ2VyLndhcm4oJ1Bhc3NrZXkgcmVjb3ZlcnkgdG9rZW4gcmVqZWN0ZWQnLCB7CiAgICAgICAgdG9rZW4sCiAgICAgICAgcmVhc29uLAogICAgICB9KTsKICAgICAgc3dpdGNoIChyZWFzb24pIHsKICAgICAgICBjYXNlICdleHBpcmVkJzoKICAgICAgICAgIHRocm93IG5ldyBBcHBFeGNlcHRpb24oCiAgICAgICAgICAgICdSZWNvdmVyeSB0b2tlbiBleHBpcmVkJywKICAgICAgICAgICAgRXJyb3JDb2RlLkFVVEhfU0VTU0lPTl9FWFBJUkVELAogICAgICAgICAgICBIdHRwU3RhdHVzLlVOUFJPQ0VTU0FCTEVfRU5USVRZLAogICAgICAgICAgKTsKICAgICAgICBjYXNlICdyZXVzZWQnOgogICAgICAgICAgdGhyb3cgbmV3IEFwcEV4Y2VwdGlvbigKICAgICAgICAgICAgJ1JlY292ZXJ5IHRva2VuIGFscmVhZHkgdXNlZCcsCiAgICAgICAgICAgIEVycm9yQ29kZS5SRVNPVVJDRV9HT05FLAogICAgICAgICAgICBIdHRwU3RhdHVzLkdPTkUsCiAgICAgICAgICApOwogICAgICAgIGRlZmF1bHQ6CiAgICAgICAgICB0aHJvdyBuZXcgQXBwRXhjZXB0aW9uKAogICAgICAgICAgICAnSW52YWxpZCByZWNvdmVyeSB0b2tlbicsCiAgICAgICAgICAgIEVycm9yQ29kZS5BVVRIX1RPS0VOX0lOVkFMSUQsCiAgICAgICAgICAgIEh0dHBTdGF0dXMuQkFEX1JFUVVFU1QsCiAgICAgICAgICApOwogICAgICB9CiAgICB9CgogICAgYXdhaXQgdGhpcy51c2VyU2VydmljZS51cGRhdGVQYXNzd29yZChyZXNldC51c2VySWQsIG5ld1Bhc3N3b3JkKTsKICAgIC8vIFJlbGF4IHRoZSBmYWxsYmFjayBwb2xpY3kgb25seSBhZnRlciB0aGUgcmVjb3ZlcnkgdG9rZW4gaXMgY29uc3VtZWQuCiAgICBhd2FpdCB0aGlzLnBhc3NrZXlTZXJ2aWNlIS5zZXRQYXNza2V5UmVxdWlyZWQocmVzZXQudXNlcklkLCBmYWxzZSk7CgogICAgdGhpcy5sb2dnZXIubG9nKCdQYXNza2V5IGFjY291bnQgcmVjb3ZlcnkgY29tcGxldGVkJywgewogICAgICBtYXNrZWRVc2VySWQ6IG1hc2tVc2VySWQocmVzZXQudXNlcklkKSwKICAgICAgdG9rZW5JZDogcmVzZXQuaWQsCiAgICB9KTsKCiAgICByZXR1cm4geyBtZXNzYWdlOiAnUGFzc2tleSBhY2Nlc3MgaGFzIGJlZW4gcmVjb3ZlcmVkLicgfTsKICB9CgogIHByaXZhdGUgYXN5bmMgaXNzdWVTZXNzaW9uKAogICAgdXNlcjogVXNlclJlc3BvbnNlLAogICAgc291cmNlOiAncGFzc3dvcmQnIHwgJ3Bhc3NrZXknLAogICk6IFByb21pc2U8ewogICAgYWNjZXNzX3Rva2VuOiBzdHJpbmc7CiAgICB1c2VyOiBVc2VyUmVzcG9uc2U7CiAgICBhbm9ueW1vdXNVc2VySWQ6IHN0cmluZzsKICB9PiB7CiAgICBjb25zdCBhbm9ueW1vdXNVc2VyID0KICAgICAgYXdhaXQgdGhpcy5hbm9ueW1vdXNVc2VyU2VydmljZS5nZXRPckNyZWF0ZUZvclVzZXJTZXNzaW9uKHVzZXIuaWQpOwogICAgY29uc3Qgcm9sZSA9IHVzZXIucm9sZSB8fCBVc2VyUm9sZS5VU0VSOwogICAgY29uc3Qgc2NvcGVzID0KICAgICAgcm9sZSA9PT0gVXNlclJvbGUuQURNSU4gPyBnZXREZWZhdWx0QWRtaW5TdGVsbGFySW52b2NhdGlvblNjb3BlcygpIDogW107CiAgICBjb25zdCBwYXlsb2FkOiBKd3RQYXlsb2FkID0gewogICAgICBlbWFpbDogdXNlci5lbWFpbCwKICAgICAgc3ViOiB1c2VyLmlkLAogICAgICB1c2VybmFtZTogdXNlci51c2VybmFtZSwKICAgICAgcm9sZSwKICAgICAgc2NvcGVzLAogICAgfTsKICAgIHRoaXMuYW5hbHl0aWNzRXZlbnRTZXJ2aWNlCiAgICAgID8u cmVjb3JkKHsKICAgICAgICBldmVudE5hbWU6ICd1c2VyX2xvZ2luJywKICAgICAgICBhY3RvcklkOiBgdXNlcjoke3VzZXIuaWR9YCwKICAgICAgICBtZXRhZGF0YTogeyBzb3VyY2UgfSwKICAgICAgfSkKICAgICAgLmNhdGNoKChlcnIpID0+CiAgICAgICAgdGhpcy5sb2dnZXIud2FybigKICAgICAgICAgIGBGYWlsZWQgdG8gcmVjb3JkIGxvZ2luIGFuYWx5dGljczogJHsgZXJyIGluc3RhbmNlb2YgRXJyb3IgPyBlcnIubWVzc2FnZSA6IFN0cmluZyhlcnIpIH1gLAogICAgICAgICksCiAgICAgICk7CiAgICByZXR1cm4gewogICAgICBhY2Nlc3NfdG9rZW46IHRoaXMuand0U2VydmljZS5zaWduKHBheWxvYWQpLAogICAgICB1c2VyLAogICAgICBhbm9ueW1vdXNVc2VySWQ6IGFub255bW91c1VzZXIuaWQsCiAgICB9OwogIH0KCiAgcHJpdmF0ZSBlbnN1cmVQYXNza2V5U2VydmljZSgpOiBhc3NlcnRzIHRoaXMgaXMgUGFzc2tleVNlcnZpY2UgewogICAgaWYgKCF0aGlzLnBhc3NrZXlTZXJ2aWNlKSB7CiAgICAgIHRocm93IG5ldyBBcHBFeGNlcHRpb24oCiAgICAgICAgJ1Bhc3NrZXkgYXV0aGVudGljYXRpb24gaXMgbm90IGF2YWlsYWJsZScsCiAgICAgICAgRXJyb3pDb2RlLklOVEVSTkFMX1NFUlZFUl9FUlJPUiwKICAgICAgICBIdHRwU3RhdHVzLklOVEVSTkFMX1NFUlZFUl9FUlJPUiwKICAgICAgKTsKICAgIH0KICB9CgogIGFzeW5jIGdlbmVyYXRlUmVzZXRQYXNzd29yZFRva2VuKGVtYWlsOiBzdHJpbmcpOiBQcm9taXNlPHN0cmluZz4gewogICAgY29uc3QgdXNlciA9IGF3YWl0IHRoaXMudXNlclNlcnZpY2UuZmluZEJ5RW1haWwoZW1haWwpOwogICAgaWYgKCF1c2VyKSB7CiAgICAgIHRocm93IG5ldyBBcHBFeGNlcHRpb24oCiAgICAgICAgJ0VtYWlsIG5vdCBmb3VuZCcsCiAgICAgICAgRXJyb3JDb2RlLk5PVF9GT1VORCwKICAgICAgICBIdHRwU3RhdHVzLk5PVF9GT1VORCwKICAgICAgKTsKICAgIH0KCiAgICBjb25zdCB0b2tlbiA9IGNyeXB0by5yYW5kb21CeXRlcygzMikudG9TdHJpbmcoJ2hleCcpOwogICAgY29uc3QgZXhwaXJlc0F0ID0gbmV3IERhdGUoKTsKICAgIGV4cGlyZXNBdC5zZXRIb3VycyhleHBpcmVzQXQuZ2V0SG91cnMoKSArIDEpOwoKICAgIC8vIFRva2VuIHN0b3JlZCBpbnRlcm5hbGwg4oCUIG5ldmVyIHJldHVybmVkIHRvIGNhbGxlciBvciBzZXJpYWxpemVkIHRvIEhUVFAgcmVzcG9uc2UuCiAgICBhd2FpdCB0aGlzLnVzZXJTZXJ2aWNlLnNldFJlc2V0UGFzc3dvcmRUb2tlbih1c2VyLmlkLCB0b2tlbiwgZXhwaXJlc0F0KTsKICAgIHJldHVybiB0b2tlbjsKICB9CgogIGFzeW5jIHJlc2V0UGFzc3dvcmQoCiAgICB0b2tlbjogc3RyaW5nLAogICAgbmV3UGFzc3dvcmQ6IHN0cmluZywKICApOiBQcm9taXNlPHsgbWVzc2FnZTogc3RyaW5nIH0+IHsKICAgIHRyeSB7CiAgICAgIGNvbnN0IHsgcmVzZXQsIHJlYXNvbiB9ID0KICAgICAgICBhd2FpdCB0aGlzLnBhc3N3b3JkUmVzZXRTZXJ2aWNlLmNvbnN1bWVWYWxpZFRva2VuKHRva2VuKTsKCiAgICAgIGlmICghcmVzZXQpIHsKICAgICAgICB0aGlzLmxvZ2dlci53YXJuKGBSZXNldCB0b2tlbiByZWplY3RlZGAsIHsgdG9rZW4sIHJlYXNvbiB9KTsKCiAgICAgICAgc3dpdGNoIChyZWFzb24pIHsKICAgICAgICAgIGNhc2UgJ2ludmFsaWQnOgogICAgICAgICAgICB0aHJvdyBuZXcgQXBwRXhjZXB0aW9uKAogICAgICAgICAgICAgICdJbnZhbGlkIHJlc2V0IHRva2VuJywKICAgICAgICAgICAgICBFcnJvckNvZGUuQVVUSF9UT0tFTl9JTlZBTElELAogICAgICAgICAgICAgIEh0dHBTdGF0dXMuQkFEX1JFUVVFU1QsCiAgICAgICAgICAgICk7CiAgICAgICAgICBjYXNlICdleHBpcmVkJzoKICAgICAgICAgICAgdGhyb3cgbmV3IEFwcEV4Y2VwdGlvbigKICAgICAgICAgICAgICAnUmVzZXQgdG9rZW4gZXhwaXJlZCcsCiAgICAgICAgICAgICAgRXJyb3JDb2RlLkFVVEhfU0VTU0lPTl9FWFBJUkVELAogICAgICAgICAgICAgIEh0dHBTdGF0dXMuVU5QUk9DRVNTQUJMRV9FTlRJVFksCiAgICAgICAgICAgICk7CiAgICAgICAgICBjYXNlICdyZXVzZWQnOgogICAgICAgICAgICB0aHJvdyBuZXcgQXBwRXhjZXB0aW9uKAogICAgICAgICAgICAgICdSZXNldCB0b2tlbiBhbHJlYWR5IHVzZWQnLAogICAgICAgICAgICAgIEVycm9yQ29kZS5SRVNPVVJDRV9HT05FLAogICAgICAgICAgICAgIEh0dHBTdGF0dXMuR09ORSwKICAgICAgICAgICAgKTsKICAgICAgICAgIGRlZmF1bHQ6CiAgICAgICAgICAgIHRocm93IG5ldyBBcHBFeGNlcHRpb24oCiAgICAgICAgICAgICAgJ0ludmFsaWQgcmVzZXQgdG9rZW4nLAogICAgICAgICAgICAgIEVycm9yQ29kZS5BVVRIX1RPS0VOX0lOVkFMSUQsCiAgICAgICAgICAgICAgSHR0cFN0YXR1cy5CQURfUkVRVUVTVCwKICAgICAgICAgICAgKTsKICAgICAgICB9CiAgICAgIH0KCiAgICAgIGF3YWl0IHRoaXMudXNlclNlcnZpY2UudXBkYXRlUGFzc3dvcmQocmVzZXQudXNlcklkLCBuZXdQYXNzd29yZCk7CgogICAgICB0aGlzLmxvZ2dlci5sb2coYFBhc3N3b3JkIHJlc2V0IHN1Y2Nlc3NmdWxgLCB7CiAgICAgICAgbWFza2VkVXNlcklkOiBtYXNrVXNlcklkKHJlc2V0LnVzZXJJZCksCiAgICAgICAgdG9rZW5JZDogcmVzZXQuaWQsCiAgICAgIH0pOwoKICAgICAgcmV0dXJuIHsgbWVzc2FnZTogJ1Bhc3N3b3JkIGhhcyBiZWVuIHJlc2V0IHN1Y2Nlc3NmdWxseScgfTsKICAgIH0gY2F0Y2ggKGVycm9yKSB7CiAgICAgIGNvbnN0IGVycm9yTWVzc2FnZSA9CiAgICAgICAgZXJyb3IgaW5zdGFuY2VvZiBFcnJvciA/IGVycm9yLm1lc3NhZ2UgOiAnVW5rbm93biBlcnJvcic7CgogICAgICBpZiAoCiAgICAgICAgZXJyb3IgaW5zdGFuY2VvZiBBcHBFeGNlcHRpb24gfHwKICAgICAgICBlcnJvciBpbnN0YW5jZW9mIEJhZFJlcXVlc3RFeGNlcHRpb24gfHwKICAgICAgICBlcnJvciBpbnN0YW5jZW9mIEdvbmVFeGNlcHRpb24gfHwKICAgICAgICBlcnJvciBpbnN0YW5jZW9mIFVucHJvY2Vzc2FibGVFbnRpdHlFeGNlcHRpb24KICAgICAgKSB7CiAgICAgICAgdGhyb3cgZXJyb3I7CiAgICAgIH0KCiAgICAgIHRoaXMubG9nZ2VyLmVycm9yKGBQYXNzd29yZCByZXNldCBmYWlsZWQ6ICR7ZXJyb3JNZXNzYWdlfWAsIHsKICAgICAgICB0b2tlbiwKICAgICAgICBlcnJvcjogZXJyb3JNZXNzYWdlLAogICAgICB9KTsKICAgICAgdGhyb3cgbmV3IEFwcEV4Y2VwdGlvbigKICAgICAgICAnRmFpbGVkIHRvIHJlc2V0IHBhc3N3b3JkJywKICAgICAgICBFcnJvckNvZGUuSU5URVJOQUxfU0VSVkVSX0VSUk9SLAogICAgICAgIEh0dHBTdGF0dXMuSU5URVJOQUxfU0VSVkVSX0VSUk9SLAogICAgICApOwogICAgfQogIH0KCiAgYXN5bmMgdmFsaWRhdGVVc2VyQnlJZCh1c2VySWQ6IG51bWJlcik6IFByb21pc2U8VXNlclJlc3BvbnNlIHwgbnVsbD4gewogICAgY29uc3QgdXNlciA9IGF3YWl0IHRoaXMudXNlclNlcnZpY2UuZmluZEJ5SWQodXNlcklkKTsKICAgIGlmICh1c2VyICYmIHVzZXIuaXNfYWN0aXZlKSB7CiAgICAgIGNvbnN0IGRlY3J5cHRlZEVtYWlsID0gQ3J5cHRvVXRpbC5kZWNyeXB0KAogICAgICAgIHVzZXIuZW1haWxFbmNyeXB0ZWQsCiAgICAgICAgdXNlci5lbWFpbEl2LAogICAgICAgIHVzZXIuZW1haWxUYWcsCiAgICAgICk7CiAgICAgIC8vIHJlc2V0UGFzc3dvcmRUb2tlbiBhbmQgcmVzZXRQYXNzd29yZEV4cGlyZXMgYXJlIGludGVybmFsIOKAlCBuZXZlciBzZW50IHRvIGNsaWVudHMuCiAgICAgIHJldHVybiB7CiAgICAgICAgaWQ6IHVzZXIuaWQsCiAgICAgICAgdXNlcm5hbWU6IHVzZXIudXNlcm5hbWUsCiAgICAgICAgcm9sZTogdXNlci5yb2xlLAogICAgICAgIGlzX2FjdGl2ZTogdXNlci5pc19hY3RpdmUsCiAgICAgICAgZW1haWw6IGRlY3J5cHRlZEVtYWlsLAogICAgICAgIG5vdGlmaWNhdGlvblByZWZlcmVuY2VzOiB1c2VyLm5vdGlmaWNhdGlvblByZWZlcmVuY2VzIHx8IHt9LAogICAgICAgIHByaXZhY3k6IHsKICAgICAgICAgIGlzRGlzY292ZXJhYmxlOiB1c2VyLmlzRGlzY292ZXJhYmxlKCksCiAgICAgICAgICBjYW5SZWNlaXZlUmVwbGllczogdXNlci5jYW5SZWNlaXZlUmVwbGllcygpLAogICAgICAgICAgc2hvd1JlYWN0aW9uczogdXNlci5zaG91bGRTaG93UmVhY3Rpb25zKCksCiAgICAgICAgICBkYXRhUHJvY2Vzc2luZ0NvbnNlbnQ6IHVzZXIuaGFzRGF0YVByb2Nlc3NpbmdDb25zZW50KCksCiAgICAgICAgfSwKICAgICAgICBjcmVhdGVkQXQ6IHVzZXIuY3JlYXRlZEF0LAogICAgICAgIHVwZGF0ZWRBdDogdXNlci51cGRhdGVkQXQsCiAgICAgIH07CiAgICB9CiAgICByZXR1cm4gbnVsbDsKICB9CgogIGFzeW5jIGZvcmdvdFBhc3N3b3JkKAogICAgZm9yZ290UGFzc3dvcmREdG86IEZvcmdvdFBhc3N3b3JkRHRvLAogICAgaXBBZGRyZXNzPzogc3RyaW5nLAogICAgdXNlckFnZW50Pzogc3RyaW5nLAogICk6IFByb21pc2U8eyBtZXNzYWdlOiBzdHJpbmcgfT4gewogICAgdHJ5IHsKICAgICAgaWYgKCFGb3Jnb3RQYXNzd29yZER0by52YWxpZGF0ZShmb3Jnb3RQYXNzd29yZER0bykpIHsKICAgICAgICB0aHJvdyBuZXcgQXBwRXhjZXB0aW9uKAogICAgICAgICAgJ0VpdGhlciBlbWFpbCBvciB1c2VySWQgbXVzdCBiZSBwcm92aWRlZCcsCiAgICAgICAgICBFcnJvckNvZGUuQkFEX1JFUVVFU1QsCiAgICAgICAgICBIdHRwU3RhdHVzLkJBRF9SRVFVRVNULAogICAgICAgICk7CiAgICAgIH0KCiAgICAgIGxldCB1c2VyOwoKICAgICAgaWYgKGZvcmdvdFBhc3N3b3JkRHRvLmVtYWlsKSB7CiAgICAgICAgdXNlciA9IGF3YWl0IHRoaXMudXNlclNlcnZpY2UuZmluZEJ5RW1haWwoZm9yZ290UGFzc3dvcmREdG8uZW1haWwpOwogICAgICAgIHRoaXMubG9nZ2VyLmxvZyhgUGFzc3dvcmQgcmVzZXQgcmVxdWVzdGVkIGZvciBlbWFpbDogW1BST1RFQ1RFRF1gLCB7CiAgICAgICAgICBlbWFpbDogJ1tQUk9URUNURURdJywKICAgICAgICAgIGlwQWRkcmVzcywKICAgICAgICB9KTsKICAgICAgfSBlbHNlIGlmIChmb3Jnb3RQYXNzd29yZER0by51c2VySWQpIHsKICAgICAgICB1c2VyID0gYXdhaXQgdGhpcy51c2VyU2VydmljZS5maW5kQnlJZChmb3Jnb3RQYXNzd29yZER0by51c2VySWQpOwogICAgICAgIHRoaXMubG9nZ2VyLmxvZygKICAgICAgICAgIGBQYXNzd29yZCByZXNldCByZXF1ZXN0ZWQgZm9yIG1hc2tlZCB1c2VyIElEOiAke21hc2tVc2VySWQoZm9yZ290UGFzc3dvcmREdG8udXNlcklkKX1gLAogICAgICAgICAgeyBtYXNrZWRVc2VySWQ6IG1hc2tVc2VySWQoZm9yZ290UGFzc3dvcmREdG8udXNlcklkKSwgaXBBZGRyZXNzIH0sCiAgICAgICAgKTsKICAgICAgfQoKICAgICAgaWYgKCF1c2VyKSB7CiAgICAgICAgdGhpcy5sb2dnZXIud2FybihgUGFzc3dvcmQgcmVzZXQgYXR0ZW1wdGVkIGZvciBub24tZXhpc3RlbnQgdXNlcmAsIHsKICAgICAgICAgIG1hc2tlZFVzZXJJZDogZm9yZ290UGFzc3dvcmREdG8udXNlcklkCiAgICAgICAgICAgID8gbWFza1VzZXJJZChmb3Jnb3RQYXNzd29yZER0by51c2VySWQpCiAgICAgICAgICAgIDogdW5kZWZpbmVkLAogICAgICAgICAgaXBBZGRyZXNzLAogICAgICAgIH0pOwogICAgICAgIHJldHVybiB7CiAgICAgICAgICBtZXNzYWdlOiAnSWYgdGhlIHVzZXIgZXhpc3RzLCBhIHBhc3N3b3JkIHJlc2V0IGVtYWlsIGhhcyBiZWVuIHNlbnQuJywKICAgICAgICB9OwogICAgICB9CgogICAgICBhd2FpdCB0aGlzLnBhc3N3b3JkUmVzZXRTZXJ2aWNlLmludmFsaWRhdGVVc2VyVG9rZW5zKHVzZXIuaWQpOwoKICAgICAgY29uc3QgdG9rZW4gPSBhd2FpdCB0aGlzLnBhc3N3b3JkUmVzZXRTZXJ2aWNlLmNyZWF0ZVJlc2V0VG9rZW4oCiAgICAgICAgdXNlci5pZCwKICAgICAgICBpcEFkZHJlc3MsCiAgICAgICAgdXNlckFnZW50LAogICAgICApOwoKICAgICAgYXdhaXQgdGhpcy5lbWFpbFNlcnZpY2Uuc2VuZFBhc3N3b3JkUmVzZXRFbWFpbCgKICAgICAgICBDcnlwdG9VdGlsLmRlY3J5cHQodXNlci5lbWFpbEVuY3J5cHRlZCwgdXNlci5lbWFpbEl2LCB1c2VyLmVtYWlsVGFnKSwKICAgICAgICB0b2tlbiwKICAgICAgICB1c2VyLnVzZXJuYW1lLAogICAgICApOwoKICAgICAgdGhpcy5sb2dnZXIubG9nKGBQYXNzd29yZCByZXNldCBlbWFpbCBzZW50IHN1Y2Nlc3NmdWxseWAsIHsKICAgICAgICBtYXNrZWRVc2VySWQ6IG1hc2tVc2VySWQodXNlci5pZCksCiAgICAgICAgaXBBZGRyZXNzLAogICAgICAgIHVzZXJBZ2VudCwKICAgICAgfSk7CgogICAgICByZXR1cm4gewogICAgICAgIG1lc3NhZ2U6ICdJZiB0aGUgdXNlciBleGlzdHMsIGEgcGFzc3dvcmQgcmVzZXQgZW1haWwgaGFzIGJlZW4gc2VudC4nLAogICAgICB9OwogICAgfSBjYXRjaCAoZXJyb3IpIHsKICAgICAgY29uc3QgZXJyb3JNZXNzYWdlID0KICAgICAgICBlcnJvciBpbnN0YW5jZW9mIEVycm9yID8gZXJyb3IubWVzc2FnZSA6ICdVbmtub3duIGVycm9yJzsKCiAgICAgIGlmIChlcnJvciBpbnN0YW5jZW9mIEJhZFJlcXVlc3RFeGNlcHRpb24pIHsKICAgICAgICB0aHJvdyBlcnJvcjsKICAgICAgfQoKICAgICAgdGhpcy5sb2dnZXIuZXJyb3IoYEZvcmdvdCBwYXNzd29yZCBwcm9jZXNzIGZhaWxlZDogJHtlcnJvck1lc3NhZ2V9YCwgewogICAgICAgIG1hc2tlZFVzZXJJZDogZm9yZ290UGFzc3dvcmREdG8udXNlcklkCiAgICAgICAgICA/IG1hc2tVc2VySWQoZm9yZ290UGFzc3dvcmREdG8udXNlcklkKQogICAgICAgICAgOiB1bmRlZmluZWQsCiAgICAgICAgaXBBZGRyZXNzLAogICAgICAgIGVycm9yOiBlcnJvck1lc3NhZ2UsCiAgICAgIH0pOwoKICAgICAgcmV0dXJuIHsKICAgICAgICBtZXNzYWdlOiAnSWYgdGhlIHVzZXIgZXhpc3RzLCBhIHBhc3N3b3JkIHJlc2V0IGVtYWlsIGhhcyBiZWVuIHNlbnQuJywKICAgICAgfTsKICAgIH0KICB9Cn0K
+﻿import { maskUserId } from '../utils/mask-user-id';
+import {
+  Injectable,
+  UnauthorizedException,
+  BadRequestException,
+  GoneException,
+  UnableToProcessEntityException,
+  Logger,
+  Optional,
+} from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import { UserService } from '../user/user.service';
+import { EmailService } from '../email/email.service';
+import { PasswordResetService } from './password-reset.service';
+import { AnonymousUserService } from '../user/anonymous-user.service';
+import { LockoutService } from './lockout.service';
+import * as bcrypt from 'bcryptjs';
+import * as crypto from 'crypto';
+import { UserResponse } from '../user/dto/user-response.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { CryptoUtil } from '../common/crypto.util';
+import { JwtPayload } from './interfaces/jwt-payload.interface';
+import { UserRole } from '../user/entities/user.entity';
+import { AppException } from '../common/errors/app-exception';
+import { ErrorCode } from '../common/errors/error-codes';
+import { HttpStatus } from '@nestjs/common';
+import { getDefaultAdminStellarInvocationScopes } from '../stellar/stellar-invocation-policy';
+import { AnalyticsEventService } from '../analytics/analytics-event.service';
+
+export interface AuthSessionResult {
+  access_token: string;
+  user: UserResponse;
+  anonymousUserId: string;
+}
+
+export interface AuthMessageResult {
+  message: string;
+}
+
+@injUctable()
+export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+  private readonly mergeAuditLog: MergeAuditEntry[] = [];
+
+  /**
+   * Rotation state for auth secrets. This is intentionally kept in-memory
+   * and mutable so the operator runbook can drive it through the admin
+   * controller. Persistence is outside the scope of this boundary.
+   */
+  private rotationState: AuthSecretRotationState = {
+    activeKeyVersion: DEFAULT_KEY_VERSION,
+    readableKeyVersions: [DEFAULT_KEY_VERSION],
+    retiredKeyVersions: [],
+    inProgress: false,
+  };
+
+  /** Rollback tokens issued by `startRotation`, keyed by the new version. */
+  private readonly rollbackTokens = new Map<string, string>();
+
+  constructor(
+    private userService: UserService,
+    private jwtService: JwtService,
+    private emailService: EmailService,
+    private passwordResetService: PasswordResetService,
+    private anonymousUserService: AnonymousUserService,
+    private lockoutService: LockoutService,
+    @Optional()
+    private readonly analyticsEventService?: AnalyticsEventService,
+  ) {}
+
+  /**
+   * Returns the current rotation state. Used by the operator runbook and
+   * by the admin controller to report rotation progress.
+   */
+  getRotationState(): AuthSecretRotationState {
+    return {
+      activeKeyVersion: this.rotationState.activeKeyVersion,
+      readableKeyVersions: [...this.rotationState.readableKeyVersions],
+      retiredKeyVersions: [...this.rotationState.retiredKeyVersions],
+      inProgress: this.rotationState.inProgress,
+    };
+  }
+
+  /**
+   * Start a dual-read/single-write rotation to a new active key version.
+   * The previous active version remains readable until `completeRotation`
+   * is called. The returned token allows rollback if the rotation is
+   * interrupted.
+   */
+  startRotation(newKeyVersion: string): AuthSecretRotationResult {
+    if (!newKeyVersion || typeof newKeyVersion !== 'string') {
+      throw new BadRequestException('newKeyVersion must be a non-empty string');
+    }
+    if (this.rotationState.retiredKeyVersions.includes(newKeyVersion)) {
+      throw new BadRequestException(
+        `Key version ${newKeyVersion} is retired and cannot be reactivated`,
+      );
+    }
+    if (this.rotationState.inProgress) {
+      throw new BadRequestException(
+        'A rotation is already in progress; complete or roll back first',
+      );
+    }
+
+    const previousActiveKeyVersion = this.rotationState.activeKeyVersion;
+    const rollbackToken = crypto.randomBytes(16).toString('hex');
+
+    this.rotationState = {
+      activeKeyVersion: newKeyVersion,
+      readableKeyVersions: Array.from(
+        new Set([
+          ...this.rotationState.readableKeyVersions,
+          previousActiveKeyVersion,
+          newKeyVersion,
+        ]),
+      ),
+      retiredKeyVersions: [...this.rotationState.retiredKeyVersions],
+      inProgress: true,
+    };
+    this.rollbackTokens.set(newKeyVersion, rollbackToken);
+
+    this.logger.log(
+      `Started secret rotation from ${previousActiveKeyVersion} to ${newKeyVersion}`,
+    );
+
+    return {
+      success: true,
+      previousActiveKeyVersion,
+      newActiveKeyVersion: newKeyVersion,
+      rollbackToken,
+    };
+  }
+
+  /**
+   * Mark a rotation as completed. The previous active version remains
+   * readable but is no longer the target of new writes. Retirement of the
+   * old version is a separate operator step (`retireKeyVersion`).
+   */
+  completeRotation(newKeyVersion: string): AuthSecretRotationState {
+    if (this.rotationState.activeKeyVersion !== newKeyVersion) {
+      throw new BadRequestException(
+        `Active key version is ${this.rotationState.activeKeyVersion}, not ${newKeyVersion}`,
+      );
+    }
+    this.rotationState = {
+      ...this.rotationState,
+      inProgress: false,
+    };
+    this.rollbackTokens.delete(newKeyVersion);
+    this.logger.log(`Completed secret rotation to ${newKeyVersion}`);
+    return this.getRotationState();
+  }
+
+  /**
+   * Roll back a in-progress rotation to the previous active key version.
+   * Requires the rollback token issued by `startRotation`. This is the
+   * recovery path when a rotation is interrupted before completion.
+   */
+  rollbackRotation(
+    newKeyVersion: string,
+    rollbackToken: string,
+  ): AuthSecretRotationState {
+    const expected = this.rollbackTokens.get(newKeyVersion);
+    if (!expected || expected !== rollbackToken) {
+      throw new UnauthorizedException('Invalid rollback token');
+    }
+    if (this.rotationState.activeKeyVersion !== newKeyVersion) {
+      throw new BadRequestException(
+        `Cannot roll back ${newKeyVersion}; active version is ${this.rotationState.activeKeyVersion}`,
+      );
+    }
+
+    const previousActive = this.rotationState.readableKeyVersions.find(
+      (v) => v !== newKeyVersion,
+    );
+    if (!previousActive) {
+      throw new BadRequestException(
+        'No previous key version available to roll back to',
+      );
+    }
+
+    this.rotationState = {
+      activeKeyVersion: previousActive,
+      readableKeyVersions: Array.from(
+        new Set([...this.rotationState.readableKeyVersions, newKeyVersion]),
+      ),
+      retiredKeyVersions: [...this.rotationState.retiredKeyVersions],
+      inProgress: false,
+    };
+    this.rollbackTokens.delete(newKeyVersion);
+    this.logger.warn(`Rolled back secret rotation to ${previousActive}`);
+    return this.getRotationState();
+  }
+
+  /**
+   * Retire a key version. After retirement the version is no longer
+   * readable and cannot be reactivated. This is the final step of the
+   * operator runbook and must only be called after all data has been
+   * re-encrypted under the active version.
+   */
+  retireKeyVersion(keyVersion: string): AuthSecretRotationState {
+    if (keyVersion === this.rotationState.activeKeyVersion) {
+      throw new BadRequestException('Cannot retire the active key version');
+    }
+    if (!this.rotationState.readableKeyVersions.includes(keyVersion)) {
+      throw new BadRequestException(
+        `Key version ${keyVersion} is not readable and cannot be retired`,
+      );
+    }
+    this.rotationState = {
+      ...this.rotationState,
+      readableKeyVersions: this.rotationState.readableKeyVersions.filter(
+        (v) => v !== keyVersion,
+      ),
+      retiredKeyVersions: Array.from(
+        new Set([...this.rotationState.retiredKeyVersions, keyVersion]),
+      ),
+    };
+    this.logger.warn(`Retired secret key version ${keyVersion}`);
+    return this.getRotationState();
+  }
+
+  /**
+   * Resolve a key version for reading. Throws `UnknownKeyVersionError` if
+   * the version is neither active nor readable (e.g. retired or never
+   * registered). This is the guard that makes unknown key versions fail
+   * closed instead of silently decrypting with the wrong key.
+   */
+  resolveReadKeyVersion(keyVersion: string): string {
+    if (this.rotationState.retiredKeyVersions.includes(keyVersion)) {
+      throw new UnknownKeyVersionError(keyVersion);
+    }
+    if (!this.rotationState.readableKeyVersions.includes(keyVersion)) {
+      throw new UnknownKeyVersionError(keyVersion);
+    }
+    return keyVersion;
+  }
+
+  /**
+   * Returns the version to use for new writes. Always the active key
+   * version — never a readable but non-active version.
+   */
+  getActiveWriteKeyVersion(): string {
+    return this.rotationState.activeKeyVersion;
+  }
+
+  async validateUser(
+    email: string,
+    password: string,
+  ): Promise<UserResponse | null> {
+    const user = await this.userService.findByEmail(email);
+    if (user && (await bcrypt.compare(password, user.password))) {
+      if (!user.is_active) {
+        throw new AppException(
+          'Account is deactivated. Please reactivate your account to continue.',
+          ErrorCode.AUTH_ACCOUNT_DEVACTIVATED,
+          HttpStatus.UTAUTHORIZED,
+        );
+      }
+      const decryptedEmail = CryptoUtil.decrypt(
+        user.emailEncrypted,
+        user.emailIv,
+        user.emailTag,
+      );
+      // resetPasswordToken and resetPasswordExpires are internal — never sent to clients.
+      return {
+        id: user.id,
+        username: user.username,
+        role: user.role,
+        is_active: user.is_active,
+        email: decryptedEmail,
+        notificationPreferences: user.notificationPreferences || {},
+        privacy: {
+          isDiscoverable: user.isDiscoverable(),
+          canReceiveReplies: user.canReceiveReplies(),
+          showReactions: user.shouldShowReactions(),
+          dataProcessingConsent: user.hasDataProcessingConsent(),
+        },
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+      };
+    }
+    return null;
+  }
+
+  async login(
+    email: string,
+    password: string,
+  ): Promise<AuthSessionResult> {
+    // Check lockout before validating credentials
+    const lockStatus = await this.lockoutService.getStatus(email);
+    if (lockStatus.isLocked) {
+      throw new AppException(
+        'Too? many failed login attempts. Please try again later.',
+        ErrorCode.AUTH_INVALID_CREDENTIALS,
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+
+    const user = await this.validateUser(email, password);
+    if (!user) {
+      await this.lockoutService.recordFailedAttempt(email);
+      throw new AppException(
+        'Invalid credentials',
+        ErrorCode.AUTH_INVALID_CREDENTIALS,
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+    await this.lockoutService.clearLockout(email);
+    const anonymousUser =
+      await this.anonymousUserService.getOrCreateForUserSession(user.id);
+    const role = user.role || UserRole.USER;
+    const scopes =
+      role === UserRole.ADMIN ? getDefaultAdminStellarInvocationScopes() : [];
+    const session = this.createSession(user.id);
+    const payload: JwtPayload = {
+      email: user.email,
+      sub: user.id,
+      username: user.username,
+      role,
+      scopes,
+      sid: session.id,
+    };
+    this.analyticsEventService
+      ?.record({
+        eventName: 'user_login',
+        actorId: `user:${user.id}`,
+        metadata: { source: 'auth_service' },
+      })
+      .catch((err) =>
+        this.logger.warn(
+          `Failed to record login analytics: ${%rr() {
+            err instanceof Error ? err.message : String(err)
+          }`,
+        ),
+      );
+    return {
+      access_token: this.jwtService.sign(payload),
+      user,
+      anonymousUserId: anonymousUser.id,
+    };
+  }
+
+  async generateResetPasswordToken(email: string): Promise<string> {
+    const user = await this.userService.findByEmail(email);
+    if (!user) {
+      throw new AppException(
+        'Email not found',
+        ErrorCode.NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date();
+    expiresAt.setHours(expiresAt.getHours() + 1);
+
+    // Token stored internally — never returned to caller or serialized to HTTP response.
+    await this.userService.setResetPasswordToken(user.id, token, expiresAt);
+    return token;
+  }
+
+  async resetPassword(
+    token: string,
+    newPassword: string,
+  ): Promise<AuthMessageResult> {
+    try {
+      const { reset, reason } =
+        await this.passwordResetService.consumeValidToken(token);
+
+      if (!reset) {
+        this.logger.warn(`Reset token rejected`, { token, reason });
+
+        switch (reason) {
+          case 'invalid':
+            throw new AppException(
+              'Invalid reset token',
+              ErrorCode.AUTH_TOKEN_INVALID,
+              HttpStatus.BAD_REQUEST,
+            );
+          case 'expired':
+            throw new AppException(
+              'Reset token expired',
+              ErrorCode.AUTH_SESSION_EXPIRED,
+              HttpStatus.UNPROCESSABLE_ENTITY,
+            );
+          case 'reused':
+            throw new AppException(
+              'Reset token already used',
+              ErrorCode.RESOURCE_GONE,
+              HttpStatus.GONE,
+            );
+          default:
+            throw new AppException(
+              'Invalid reset token',
+              ErrorCode.AUTH_TOKEN_INVALID,
+              HttpStatus.BAD_REQUEST,
+            );
+        }
+      }
+
+      await this.userService.updatePassword(reset.userId, newPassword);
+
+      // Password reset invalidates all prior sessions.
+      this.revokeUserSessions(reset.userId, 'password_reset');
+
+      this.logger.log(`Password reset successful`, {
+        maskedUserId: maskUserId(reset.userId),
+        tokenId: reset.id,
+      });
+
+      return { message: 'Password has been reset successfully' };
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'Unknown error';
+
+      if (
+        error instanceof AppException ||
+        error instanceof BadRequestException ||
+        error instanceof GoneException ||
+        error instanceof UnableToProcessEntityException
+      ) {
+        throw error;
+      }
+
+      this.logger.error(`Password reset failed: ${errorMessage}`, {
+        token,
+        error: errorMessage,
+      });
+      throw new AppException(
+        'Failed to reset password',
+        ErrorCode.INTERNAL_SERVER_ERROR,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  async validateUserById(userId: number): Promise<UserResponse | null> {
+    const user = await this.userService.findById(userId);
+    if (user && user.is_active) {
+      const decryptedEmail = CryptoUtil.decrypt(
+        user.emailEncrypted,
+        user.emailIv,
+        user.emailTag,
+      );
+      // resetPasswordToken and resetPasswordExpires are internal — never sent to clients.
+      return {
+        id: user.id,
+        username: user.username,
+        role: user.role,
+        is_active: user.is_active,
+        email: decryptedEmail,
+        notificationPreferences: user.notificationPreferences || {},
+        privacy: {
+          isDiscoverable: user.isDiscoverable(),
+          canReceiveReplies: user.canReceiveReplies(),
+          showReactions: user.shouldShowReactions(),
+          dataProcessingConsent: user.hasDataProcessingConsent(),
+        },
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+      };
+    }
+    return null;
+  }
+
+  async forgotPassword(
+    forgotPasswordDto: ForgotPasswordDto,
+    ipAddress?: string,
+    userAgent?: string,
+  ): Promise<AuthMessageResult> {
+    try {
+      if (!ForgotPasswordDto.validate(forgotPasswordDto)) {
+        throw new AppException(
+          'Either email or userId must be provided',
+          ErrorCode.BAD_REQUEST,
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+
+      let user;
+
+      if (forgotPasswordDto.email) {
+        user = await this.userService.findByEmail(forgotPasswordDto.email);
+        this.logger.log(`Password reset requested for email: [PROTECTED]`, {
+          email: '[PROTECTED]',
+          ipAddress,
+        });
+      } else if (forgotPasswordDto.userId) {
+        user = await this.userService.findById(forgotPasswordDto.userId);
+        this.logger.log(
+          `Password reset requested for masked user ID: ${maskUserId(forgotPasswordDto.userId)}`,
+          { maskedUserId: maskUserId(forgotPasswordDto.userId), ipAddress },
+        );
+      }
+
+      if (!user) {
+        this.logger.warn(`Password reset attempted for non-existent user`, {
+          maskedUserId: forgotPasswordDto.userId
+            ? maskUserId(forgotPasswordDto.userId)
+            : undefined,
+          ipAddress,
+        });
+        return {
+          message: 'If the user exists, a password reset email has been sent.',
+        };
+      }
+
+      await this.passwordResetService.invalidateUserTokens(user.id);
+
+      const token = await this.passwordResetService.createResetToken(
+        user.id,
+        ipAddress,
+        userAgent,
+      );
+
+      await this.emailService.sendPasswordResetEmail(
+        CryptoUtil.decrypt(user.emailEncrypted, user.emailIv, user.emailTag),
+        token,
+        user.username,
+      );
+
+      this.logger.log(`Password reset email sent successfully`, {
+        maskedUserId: maskUserId(user.id),
+        ipAddress,
+        userAgent,
+      });
+
+      return {
+        message: 'If the user exists, a password reset email has been sent.',
+      };
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'Unknown error';
+
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+
+      this.logger.error(`Forgot password process failed: ${errorMessage}`, {
+        maskedUserId: forgotPasswordDto.userId
+          ? maskUserId(forgotPasswordDto.userId)
+          : undefined,
+        ipAddress,
+        error: errorMessage,
+      });
+
+      return {
+        message: 'If the user exists, a password reset email has been sent.',
+      };
+    }
+  }
+
+  /**
+   * Request an email change. The new address is not active until the
+   * verification challenge is consumed. The response is always generic to
+   * avoid leaking account existence.
+   */
+  async requestEmailChange(
+    userId: number,
+    newEmail: string,
+  ): Promise<{ message: string }> {
+    const genericMessage =
+      'If the account exists, a verification email has been sent to the new address.';
+
+    try {
+      const user = await this.userService.findById(userId);
+      if (!user) {
+        this.logger.warn(`Email change requested for non-existent user`, {
+          maskedUserId: maskUserId(userId),
+        });
+        return { message: genericMessage };
+      }
+
+      // Invalidate any prior outstanding challenges for this user.
+      for (const [challengeId, challenge] of this.emailChangeChallenges) {
+        if (challenge.userId === userId && !challenge.consumedAt) {
+          this.emailChangeChallenges.delete(challengeId);
+        }
+      }
+
+      const newEmailEncrypted = CryptoUtil.encrypt(newEmail);
+      const token = crypto.randomBytes(32).toString('hex');
+      const tokenHash = crypto
+        .createHash('sha256')
+        .update(token)
+        .digest('hex');
+      const challengeId = crypto.randomBytes(16).toString('hex');
+      const expiresAt = new Date(Date.now() + EMAIL_CHANGE_TOKEN_TTL);
+
+      this.emailChangeChallenges.set(challengeId, {
+        id: challengeId,
+        userId,
+        newEmailEncrypted: newEmailEncrypted.ciphertext,
+        newEmailIv: newEmailEncrypted.iv,
+        newEmailTag: newEmailEncrypted.tag,
+        tokenHash,
+        expiresAt,
+        createdAt: new Date(),
+      });
+
+      await this.emailService.sendEmailChangeVerificationEmail(
+        newEmail,
+        token,
+        user.username,
+      );
+
+      this.logger.log(`Email change verification requested`, {
+        maskedUserId: maskUserId(userId),
+        challengeId,
+      });
+
+      return { message: genericMessage };
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'Unknown error';
+      this.logger.error(`Email change request failed: ${errorMessage}`, {
+        maskedUserId: maskUserId(userId),
+        error: errorMessage,
+      });
+      return { message: genericMessage };
+    }
+  }
+
+  /**
+   * Consume an email change verification challenge. Replayed or expired
+   * challenges fail. On success the old address remains recoverable for a
+   * bounded window.
+   */
+  async verifyEmailChange(
+    token: string,
+  ): Promise<{ message: string }> {
+    const tokenHash = crypto
+      .createHash('sha256')
+      .update(token)
+      .digest('hex');
+
+    let matchedChallenge: EmailChangeChallenge | undefined;
+    for (const challenge of this.emailChangeChallenges.values()) {
+      if (challenge.tokenHash === tokenHash) {
+        matchedChallenge = challenge;
+        break;
+      }
+    }
+
+    if (!matchedChallenge) {
+      this.logger.warn(`Email change verification failed: invalid token`);
+      throw new AppException(
+        'Invalid email change token',
+        ErrorCode.AUTH_TOKEN_INVALID,
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    if (matchedChallenge.consumedAt) {
+      this.logger.warn(`Email change verification failed: replayed token`, {
+        maskedUserId: maskUserId(matchedChallenge.userId),
+        challengeId: matchedChallenge.id,
+      });
+      throw new AppException(
+        'Email change token already used',
+        ErrorCode.RESOURCE_GONE,
+        HttpStatus.GONE,
+      );
+    }
+
+    if (matchedChallenge.expiresAt.getTime() <= Date.now()) {
+      this.emailChangeChallenges.delete(matchedChallenge.id);
+      this.logger.warn(`Email change verification failed: expired token`, {
+        maskedUserId: maskUserId(matchedChallenge.userId),
+        challengeId: matchedChallenge.id,
+      });
+      throw new AppException(
+        'Email change token expired',
+        ErrorCode.AUTH_SESSION_EXPIRED,
+        HttpStatus.UNPROCESSABLE_ENTITY,
+      );
+    }
+
+    const user = await this.userService.findById(matchedChallenge.userId);
+    if (!user) {
+      this.emailChangeChallenges.delete(matchedChallenge.id);
+      throw new AppException(
+        'User not found',
+        ErrorCode.NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    // Retain the old address for recovery within the window.
+    this.emailChangeRecoveries.set(user.id, {
+      userId: user.id,
+      previousEmailEncrypted: user.emailEncrypted,
+      previousEmailIv: user.emailIv,
+      previousEmailTag: user.emailTag,
+      changedAt: new Date(),
+      recoveryWindowEndsAt: new Date(
+        Date.now() + EMAIL_CHANGE_RECOVERY_WINDOW_MS,
+      ),
+    });
+
+    await this.userService.updateEmail(
+      user.id,
+      matchedChallenge.newEmailEncrypted,
+      matchedChallenge.newEmailIv,
+      matchedChallenge.newEmailTag,
+    );
+
+    matchedChallenge.consumedAt = new Date();
+
+    this.logger.log(`Email change verified`, {
+      maskedUserId: maskUserId(user.id),
+      challengeId: matchedChallenge.id,
+    });
+
+    return { message: 'Email address has been updated' };
+  }
+
+  /**
+   * Roll back to the previous email address within the recovery window.
+   */
+  async rollbackEmailChange(userId: number): Promise<{ message: string }> {
+    const recovery = this.emailChangeRecoveries.get(userId);
+    if (!recovery) {
+      throw new AppException(
+        'No email change recovery available',
+        ErrorCode.NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    if (recovery.recoveryWindowEndsAt.getTime() <= Date.now()) {
+      this.emailChangeRecoveries.delete(userId);
+      throw new AppException(
+        'Email change recovery window has expired',
+        ErrorCode.RESOURCE_GONE,
+        HttpStatus.GONE,
+      );
+    }
+
+    await this.userService.updateEmail(
+      userId,
+      recovery.previousEmailEncrypted,
+      recovery.previousEmailIv,
+      recovery.previousEmailTag,
+    );
+
+    this.emailChangeRecoveries.delete(userId);
+
+    this.logger.log(`Email change rolled back`, {
+      maskedUserId: maskUserId(userId),
+    });
+
+    return { message: 'Email address has been restored' };
+  }
+}

@@ -74,6 +74,40 @@ export interface ExportLifecycleAuditRecord {
   context?: AuditLogContext;
 }
 
+export type AccountMergeAction =
+  | 'merge_requested'
+  | 'merge_confirmed'
+  | 'merge_completed'
+  | 'merge_rolled_back'
+  | 'merge_failed'
+  | 'merge_conflict_detected'
+  | 'merge_unauthorized';
+
+export interface AccountMergeConflictRecord {
+  entityType: 'username' | 'message' | 'draft' | 'tip' | 'anchor';
+  entityId?: string;
+  anonymousId?: string;
+  authenticatedId?: string;
+  resolution?: 'anonymous_wins' | 'authenticated_wins' | 'merged' | 'skipped';
+  details?: Record<string, unknown>;
+}
+
+export interface AccountMergeAuditRecord {
+  action: AccountMergeAction;
+  mergeId: string;
+  anonymousId: string;
+  authenticatedId: string;
+  authMethod?: string;
+  confirmedAt?: string;
+  completedAt?: string;
+  conflicts?: AccountMergeConflictRecord[];
+  transferred?: Record<string, number>;
+  rollback?: Record<string, unknown>;
+  reason?: string;
+  metadata?: Record<string, unknown>;
+  context?: AuditLogContext;
+}
+
 @Injectable()
 export class AuditLogService {
   private readonly logger = new Logger(AuditLogService.name);
@@ -112,6 +146,7 @@ export class AuditLogService {
       metadata.confessionId,
       metadata.exportId,
       metadata.requestId,
+      metadata.mergeId,
     ];
 
     for (const candidate of candidates) {
@@ -129,6 +164,37 @@ export class AuditLogService {
   ): string | null {
     const value = metadata?.[key];
     return typeof value === 'string' && value.length > 0 ? value : null;
+  }
+
+  private createActor(
+    type: AuditActorType,
+    id: string,
+    options?: { userId?: string | null; label?: string; source?: string | null },
+  ): AuditActor {
+    return {
+      type,
+      id,
+      userId: options?.userId ?? null,
+      ...(options?.label ? { label: options.label } : {}),
+      ...(options?.source ? { source: options.source } : {}),
+    };
+  }
+
+  private resolveActor(dto: CreateAuditLogDto): AuditActor | null {
+    if (dto.context?.actor) {
+      return dto.context.actor;
+    }
+
+    const userId = dto.context?.userId;
+    if (userId === null || userId === undefined || userId === '') {
+      return null;
+    }
+
+    return {
+      type: 'user',
+      id: String(userId),
+      userId: String(userId),
+    };
   }
 
   /**
@@ -214,13 +280,13 @@ export class AuditLogService {
       }
 
       this.logger.log(
-        `Audit log created: ${dto.actionType} by ${actor?.type || 'anonymous'} ${actor?.id || dto.context?.userId || 'anonymous'}`,
+        `Audit log created: ${dto.actionType} by ${actor?.type || 'anonymous'} ${this.redaction.maskIdentifier(actor?.id || dto.context?.userId || 'anonymous')}`,
       );
     } catch (error: unknown) {
       // Log the error but don't throw to prevent disrupting the main operation
       this.logger.error(
-        `Failed to create audit log for action ${dto.actionType}: ${error instanceof Error ? error.message : 'unknown error'}`,
-        error instanceof Error ? error.stack : undefined,
+        `Failed to create audit log for action ${dto.actionType}: ${this.redaction.redactErrorMessage(error instanceof Error ? error.message : 'unknown error')}`,
+        error instanceof Error ? this.redaction.redactErrorMessage(error.stack || '') : undefined,
       );
     }
   }
@@ -245,38 +311,38 @@ export class AuditLogService {
     });
   }
 
-/**
- * Log a moderation item's state transition (pending/flagged/escalated/
- * resolved/hidden/rejected), including actor, previous/next state, and reason.
- */
-async logModerationStateTransition(
-  moderationLogId: string,
-  from: string,
-  to: string,
-  actorId: string,
-  reason: string,
-  metadata?: { confessionId?: string; notes?: string },
-  context?: AuditLogContext,
-): Promise<void> {
-  await this.log({
-    actionType: AuditActionType.MODERATION_STATE_TRANSITION,
-    metadata: {
-      entityType: 'moderation_log',
-      entityId: moderationLogId,
-      confessionId: metadata?.confessionId,
-      previousState: from,
-      nextState: to,
-      reason,
-      notes: metadata?.notes,
-      transitionedAt: new Date().toISOString(),
-    },
-    context: {
-      ...context,
-      userId: actorId,
-      actor: this.createActor('admin', actorId),
-    },
-  });
-}
+  /**
+   * Log a moderation item's state transition (pending/flagged/escalated/
+   * resolved/hidden/rejected), including actor, previous/next state, and reason.
+   */
+  async logModerationStateTransition(
+    moderationLogId: string,
+    from: string,
+    to: string,
+    actorId: string,
+    reason: string,
+    metadata?: { confessionId?: string; notes?: string },
+    context?: AuditLogContext,
+  ): Promise<void> {
+    await this.log( {
+      actionType: AuditActionType.MODERATION_STATE_TRANSITION,
+      metadata: {
+        entityType: 'moderation_log',
+        entityId: moderationLogId,
+        confessionId: metadata?.confessionId,
+        previousState: from,
+        nextState: to,
+        reason,
+        notes: metadata?.notes,
+        transitionedAt: new Date().toISOString(),
+      },
+      context: {
+        ...context,
+        userId: actorId,
+        actor: this.createActor('admin', actorId),
+      },
+    });
+  }
 
   /**
    * Log comment deletion
@@ -330,7 +396,7 @@ async logModerationStateTransition(
     reason: string,
     context?: AuditLogContext,
   ): Promise<void> {
-    await this.log({
+    await this.log( {
       actionType: AuditActionType.REPORT_CREATED,
       metadata: {
         reportId,
@@ -434,7 +500,7 @@ async logModerationStateTransition(
     },
     context?: AuditLogContext,
   ): Promise<void> {
-    await this.log({
+    await this.log( {
       actionType: AuditActionType.NOTIFICATION_DLQ_REPLAY,
       metadata: {
         entityType: 'notification_dlq',
@@ -456,20 +522,11 @@ async logModerationStateTransition(
       queue: string;
       operationId?: string;
       targetJobIds?: string[];
-      targetJobs?: Array<Record<string, unknown>>;
-      filters?: Record<string, any>;
-      summary?: {
-        attempted: number;
-        removed: number;
-        failed: number;
-        noOp?: boolean;
-      };
-      outcomes?: Array<Record<string, unknown>>;
+      removedCount?: number;
+      retainedCount?: number;
+      cutoff?: string;
       reason?: string | null;
       cleanedAt?: string;
-      retentionDays?: number;
-      batchSize?: number;
-      dryRun?: boolean;
     },
     context?: AuditLogContext,
   ): Promise<void> {
@@ -489,911 +546,138 @@ async logModerationStateTransition(
   }
 
   /**
-   * Log a single summary entry for an export-retention cleanup run
-   * (dry-run or real), mirroring logNotificationDlqCleanup.
+   * Log an account merge / anonymous identity transfer event.
+   *
+   * This is the central audit entry point for the merge workflow. It captures:
+   * - the actor (user or admin) that initiated the merge,
+   * - the anonymous and authenticated identities involved,
+   * - explicit confirmation evidence,
+   * - conflicts that were surfaced and their resolutions,
+   * - the count of entities transferred per category,
+   * - rollback information when a merge is reversed.
    */
-  async logExportRetentionCleanup(
-    metadata: {
-      dryRun: boolean;
-      retentionDays: number;
-      cutoff: string;
-      summary: {
-        eligibleCount: number;
-        expiredCount: number;
-        chunkCount: number;
-        statusCounts: Record<string, number>;
-        requestIds: string[];
-        omittedRequestIds: number;
-      };
-      cleanedAt?: string;
-    },
-    context?: AuditLogContext,
-  ): Promise<void> {
-    await this.log({
-      actionType: AuditActionType.EXPORT_RETENTION_CLEANUP,
-      metadata: {
-        entityType: 'data_export_retention',
-        ...metadata,
-        cleanedAt: metadata.cleanedAt || new Date().toISOString(),
-      },
-      context: {
-        ...context,
-        actor: this.createActor('system', 'retention-cleanup-scheduler'),
-      },
-    });
-  }
+  async logAccountMerge(record: AccountMergeAuditRecord): Promise<void> {
+    const actor =
+      record.context?.actor ||
+      this.createActor('user', record.authenticatedId, {
+        userId: record.authenticatedId,
+        source: 'account_merge',
+      });
 
-  /**
-   * Log an admin-initiated CSV export (frontend-driven)
-   */
-  async logAdminCsvExport(
-    adminId: string | number,
-    record: {
-      label: string;
-      requestId?: string | null;
-      rowCount?: number | null;
-      filters?: Record<string, unknown> | null;
-    },
-    context?: AuditLogContext,
-  ): Promise<void> {
-    await this.log({
-      actionType: AuditActionType.ADMIN_CSV_EXPORT,
-      metadata: {
-        entityType: 'admin_csv_export',
-        label: record.label,
-        requestId: record.requestId || null,
-        rowCount: record.rowCount ?? null,
-        filters: record.filters || null,
-        exportedAt: new Date().toISOString(),
-      },
-      context: {
-        ...context,
-        userId: this.toNullableUserId(String(adminId)),
-      },
-    });
-  }
-
-  private mapExportActionType(action: ExportLifecycleAction): AuditActionType {
-    switch (action) {
-      case 'request_created':
-        return AuditActionType.EXPORT_REQUEST_CREATED;
-      case 'generation_completed':
-        return AuditActionType.EXPORT_GENERATION_COMPLETED;
-      case 'link_refreshed':
-        return AuditActionType.EXPORT_LINK_REFRESHED;
-      case 'downloaded':
-        return AuditActionType.EXPORT_DOWNLOADED;
-      case 'download_failed':
-        return AuditActionType.EXPORT_DOWNLOAD_FAILED;
-      case 'token_expired':
-        return AuditActionType.EXPORT_TOKEN_EXPIRED;
-      case 'export_expired':
-        return AuditActionType.EXPORT_EXPIRED;
-      default:
-        return AuditActionType.EXPORT_REQUEST_CREATED;
-    }
-  }
-
-  async logExportLifecycleEvent(
-    record: ExportLifecycleAuditRecord,
-  ): Promise<void> {
-    const occurredAt = record.occurredAt || new Date().toISOString();
-    const exportId = record.exportId || record.requestId;
-    const actorUserId =
-      record.actorType === 'user' || record.actorType === 'admin'
-        ? record.actorId || record.context?.userId || null
-        : null;
+    const conflicts = (record.conflicts || []).map((conflict) => ({
+      entityType: conflict.entityType,
+      entityId: conflict.entityId,
+      anonymousId: conflict.anonymousId,
+      authenticatedId: conflict.authenticatedId,
+      resolution: conflict.resolution,
+      details: conflict.details,
+    }));
 
     await this.log({
-      actionType: this.mapExportActionType(record.action),
+      actionType: AuditActionType.ACCOUNT_MERGE,
       metadata: {
+        entityType: 'account_merge',
+        entityId: record.mergeId,
+        mergeId: record.mergeId,
+        mergeAction: record.action,
+        anonymousId: record.anonymousId,
+        authenticatedId: record.authenticatedId,
+        authMethod: record.authMethod,
+        confirmedAt: record.confirmedAt,
+        completedAt: record.completedAt,
+        conflictCount: conflicts.length,
+        conflicts: conflicts.length > 0 ? conflicts : undefined,
+        transferred: record.transferred,
+        rollback: record.rollback,
+        reason: record.reason,
         ...(record.metadata || {}),
-        entityType: 'data_export',
-        entityId: exportId,
-        exportId,
-        requestId: record.requestId,
-        actorType: record.actorType,
-        actorId: record.actorId || null,
-        lifecycleAction: record.action,
-        occurredAt,
+        occurredAt: new Date().toISOString(),
       },
       context: {
         ...record.context,
-        userId: this.toNullableUserId(record.context?.userId ?? actorUserId),
-        actor: this.createActor(
-          record.actorType,
-          record.actorId || record.action,
-          {
-            userId: actorUserId,
-          },
-        ),
-      },
-    });
-  }
-
-  private buildRolloutDiff(
-    before: Record<string, unknown>,
-    after: Record<string, unknown>,
-  ): Record<string, { before: unknown; after: unknown }> {
-    const keys = new Set([
-      ...Object.keys(before || {}),
-      ...Object.keys(after || {}),
-    ]);
-    const diff: Record<string, { before: unknown; after: unknown }> = {};
-
-    for (const key of keys) {
-      const beforeValue = before?.[key];
-      const afterValue = after?.[key];
-      if (JSON.stringify(beforeValue) !== JSON.stringify(afterValue)) {
-        diff[key] = {
-          before: beforeValue,
-          after: afterValue,
-        };
-      }
-    }
-
-    return diff;
-  }
-
-  async logTemplateRolloutDiff(
-    record: TemplateRolloutDiffRecord,
-    context?: AuditLogContext,
-  ): Promise<void> {
-    const correlationId = record.source?.correlationId || context?.requestId;
-    const diff = this.buildRolloutDiff(record.before, record.after);
-    const actorUserId = context?.userId ?? record.actorId;
-
-    await this.log({
-      actionType: AuditActionType.TEMPLATE_ROLLOUT_DIFF_RECORDED,
-      metadata: {
-        entityType: 'template_rollout',
-        entityId: record.templateVersion
-          ? `${record.templateKey}:${record.templateVersion}`
-          : record.templateKey,
-        templateKey: record.templateKey,
-        templateVersion: record.templateVersion || null,
-        changeType: record.changeType,
-        actorId: record.actorId,
-        reason: record.source?.reason || null,
-        correlationId: correlationId || null,
-        sourceEndpoint: record.source?.sourceEndpoint || null,
-        sourceMethod: record.source?.sourceMethod || null,
-        before: record.before,
-        after: record.after,
-        diff,
-        changedAt: new Date().toISOString(),
-      },
-      context: {
-        ...context,
-        userId: this.toNullableUserId(actorUserId),
-        actor: this.createActor(record.actorType || 'admin', record.actorId, {
-          userId: actorUserId,
-          source: record.source?.sourceEndpoint || null,
-        }),
+        userId: record.authenticatedId,
+        actor,
       },
     });
   }
 
   /**
-   * Log template state transition
+   * Log a conflict detected during an account merge attempt.
    */
-  async logTemplateStateTransition(
-    templateKey: string,
-    version: string,
-    from: string,
-    to: string,
-    adminId: string,
-    reason?: string,
-    source?: TemplateRolloutSourceMetadata,
+  async logAccountMergeConflict(
+    mergeId: string,
+    conflicts: AccountMergeConflictRecord[],
     context?: AuditLogContext,
   ): Promise<void> {
     await this.log({
-      actionType: AuditActionType.TEMPLATE_STATE_TRANSITION,
+      actionType: AuditActionType.ACCOUNT_MERGE_CONFLICT,
       metadata: {
-        templateKey,
-        templateVersion: version,
-        from,
-        to,
-        reason,
-        entityType: 'template_version',
-        entityId: `${templateKey}:${version}`,
-        transitionedAt: new Date().toISOString(),
-      },
-      context: {
-        ...context,
-        userId: adminId,
-        actor: this.createActor('admin', adminId),
-      },
-    });
-
-    await this.logTemplateRolloutDiff(
-      {
-        templateKey,
-        templateVersion: version,
-        changeType: 'state_transition',
-        actorId: adminId,
-        actorType: 'admin',
-        before: { lifecycleState: from },
-        after: { lifecycleState: to },
-        source: {
-          reason,
-          correlationId: source?.correlationId,
-          sourceEndpoint: source?.sourceEndpoint,
-          sourceMethod: source?.sourceMethod,
-        },
+        entityType: 'account_merge',
+        entityId: mergeId,
+        mergeId,
+        conflictCount: conflicts.length,
+        conflicts: conflicts.map((conflict) => ({
+          entityType: conflict.entityType,
+          entityId: conflict.entityId,
+          anonymousId: conflict.anonymousId,
+          authenticatedId: conflict.authenticatedId,
+          resolution: conflict.resolution,
+          details: conflict.details,
+        })),
+        detectedAt: new Date().toISOString(),
       },
       context,
-    );
-  }
-
-  /**
-   * Log template killswitch toggle
-   */
-  async logTemplateKillswitchToggle(
-    adminId: string,
-    enabled: boolean,
-    templateKey?: string,
-    reason?: string,
-    source?: TemplateRolloutSourceMetadata,
-    context?: AuditLogContext,
-  ): Promise<void> {
-    await this.log({
-      actionType: AuditActionType.TEMPLATE_ROLLOUT_KILLSWITCH,
-      metadata: {
-        enabled,
-        templateKey: templateKey || 'global',
-        reason,
-        entityType: 'template_config',
-        entityId: templateKey || 'global',
-        toggledAt: new Date().toISOString(),
-      },
-      context: {
-        ...context,
-        userId: adminId,
-        actor: this.createActor('admin', adminId),
-      },
     });
-
-    await this.logTemplateRolloutDiff(
-      {
-        templateKey: templateKey || 'global',
-        changeType: 'kill_switch_toggle',
-        actorId: adminId,
-        actorType: 'admin',
-        before: { killSwitchEnabled: !enabled },
-        after: { killSwitchEnabled: enabled },
-        source: {
-          reason,
-          correlationId: source?.correlationId,
-          sourceEndpoint: source?.sourceEndpoint,
-          sourceMethod: source?.sourceMethod,
-        },
-      },
-      context,
-    );
   }
 
   /**
-   * Log template fallback activation
+   * Log an unauthorized merge attempt. This is a security-relevant event that
+   * must be retained even when the merge itself is rejected.
    */
-  async logTemplateFallbackActivated(
-    templateKey: string,
-    failedVersion: string,
-    fallbackVersion: string,
+  async logAccountMergeUnauthorized(
+    mergeId: string,
+    attemptedButUnauthorizedId: string,
     reason: string,
-    source?: TemplateRolloutSourceMetadata,
     context?: AuditLogContext,
   ): Promise<void> {
     await this.log({
-      actionType: AuditActionType.TEMPLATE_FALLBACK_ACTIVATED,
+      actionType: AuditActionType.ACCOUNT_MERGE_UNAUTHORIZED,
       metadata: {
-        templateKey,
-        failedVersion,
-        fallbackVersion,
+        entityType: 'account_merge',
+        entityId: mergeId,
+        mergeId,
+        attemptedButUnauthorizedId,
         reason,
-        entityType: 'template_version',
-        entityId: `${templateKey}:${failedVersion}`,
-        activatedAt: new Date().toISOString(),
+        attemptedAt: new Date().toISOString(),
       },
       context,
     });
+  }
 
-    await this.logTemplateRolloutDiff(
-      {
-        templateKey,
-        templateVersion: failedVersion,
-        changeType: 'fallback_activation',
-        actorId: String(
-          context?.actor?.id || context?.userId || 'template-fallback',
-        ),
-        actorType:
-          context?.actor?.type || (context?.userId ? 'admin' : 'system'),
-        before: { activeVersion: failedVersion },
-        after: { activeVersion: fallbackVersion },
-        source: {
-          reason,
-          correlationId: source?.correlationId,
-          sourceEndpoint: source?.sourceEndpoint,
-          sourceMethod: source?.sourceMethod,
-        },
+  /**
+   * Log a rollback of a previously completed account merge.
+   */
+  async logAccountMergeRollback(
+    mergeId: string,
+    anonymousId: string,
+    authenticatedId: string,
+    rollback: Record<string, unknown>,
+    reason: string,
+    context?: AuditLogContext,
+  ): Promise<void> {
+    await this.log( {
+      actionType: AuditActionType.ACCOUNT_MERGE_ROLLBACK,
+      metadata: {
+        entityType: 'account_merge',
+        entityId: mergeId,
+        mergeId,
+        anonymousId: anonymousId,
+        authenticatedId: authenticatedId,
+        rollback,
+        reason,
+        rolledBackAt: new Date().toISOString(),
       },
       context,
-    );
-  }
-
-  /**
-   * Find audit logs by entity (backward compatible with the requested feature)
-   */
-  async findByEntity(
-    entityType: string,
-    entityId: string,
-  ): Promise<AuditLog[]> {
-    try {
-      // Since we store entity info in metadata, we need to query the JSONB field
-      const logs = await this.auditLogRepository
-        .createQueryBuilder('audit_log')
-        .leftJoinAndSelect('audit_log.admin', 'admin')
-        .where('audit_log.entityType = :entityType', { entityType })
-        .andWhere('audit_log.entityId = :entityId', { entityId })
-        .orderBy('audit_log.createdAt', 'DESC')
-        .getMany();
-
-      return logs;
-    } catch (error: unknown) {
-      this.logger.error(
-        `Failed to find audit logs by entity: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      return [];
-    }
-  }
-
-  /**
-   * Find audit logs by user
-   */
-  async findByUser(userId: string | number): Promise<AuditLog[]> {
-    const normalizedUserId = this.toNullableUserId(userId);
-    if (normalizedUserId === null) {
-      return [];
-    }
-
-    try {
-      return this.auditLogRepository.find({
-        where: { adminId: normalizedUserId },
-        order: { createdAt: 'DESC' },
-        relations: ['admin'],
-      });
-    } catch (error: unknown) {
-      this.logger.error(
-        `Failed to find audit logs by user: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      return [];
-    }
-  }
-
-  /**
-   * Get audit logs with filtering and pagination
-   */
-  async findAll(options: {
-    userId?: string | number;
-    actor?: string;
-    actorId?: string;
-    actorType?: string;
-    actionType?: AuditActionType;
-    entityType?: string;
-    entityId?: string;
-    requestId?: string;
-    exportId?: string;
-    templateKey?: string;
-    templateVersion?: string;
-    search?: string;
-    sortBy?: 'createdAt' | 'actor' | 'action' | 'target';
-    sortOrder?: 'ASC' | 'DESC';
-    startDate?: Date;
-    endDate?: Date;
-    limit?: number;
-    offset?: number;
-  }) {
-    try {
-      const query = this.auditLogRepository
-        .createQueryBuilder('audit_log')
-        .leftJoinAndSelect('audit_log.admin', 'admin');
-
-      if (options.userId) {
-        const normalizedUserId = this.toNullableUserId(options.userId);
-        if (normalizedUserId === null) {
-          return {
-            logs: [],
-            total: 0,
-            limit: options.limit || 100,
-            offset: options.offset || 0,
-          };
-        }
-        query.andWhere('audit_log.admin_id = :userId', {
-          userId: normalizedUserId,
-        });
-      }
-
-      if (options.actor) {
-        const actor = options.actor.trim();
-        if (actor) {
-          const normalizedActorId = this.toNullableUserId(actor);
-          query.andWhere(
-            `(${[
-              'admin.username ILIKE :actorLike',
-              "audit_log.metadata->>'actorLabel' ILIKE :actorLike",
-              "audit_log.metadata->>'actorId' ILIKE :actorLike",
-              normalizedActorId === null
-                ? null
-                : 'audit_log.admin_id = :actorId',
-            ]
-              .filter(Boolean)
-              .join(' OR ')})`,
-            {
-              actorLike: `%${actor}%`,
-              actorId: normalizedActorId,
-            },
-          );
-        }
-      }
-
-      if (options.actorId) {
-        const normalizedActorId = this.toNullableUserId(options.actorId);
-        query.andWhere(
-          normalizedActorId === null
-            ? "audit_log.metadata->>'actorId' = :actorIdRaw"
-            : "(audit_log.admin_id = :actorId OR audit_log.metadata->>'actorId' = :actorIdRaw)",
-          {
-            actorId: normalizedActorId,
-            actorIdRaw: options.actorId,
-          },
-        );
-      }
-
-      if (options.actorType) {
-        query.andWhere("audit_log.metadata->>'actorType' = :actorType", {
-          actorType: options.actorType,
-        });
-      }
-
-      if (options.actionType) {
-        query.andWhere('audit_log.action = :actionType', {
-          actionType: options.actionType,
-        });
-      }
-
-      if (options.entityType) {
-        query.andWhere('audit_log.entity_type = :entityType', {
-          entityType: options.entityType,
-        });
-      }
-
-      if (options.entityId) {
-        query.andWhere('audit_log.entity_id = :entityId', {
-          entityId: options.entityId,
-        });
-      }
-
-      if (options.requestId) {
-        query.andWhere(
-          "(audit_log.request_id = :requestId OR audit_log.metadata->>'requestId' = :requestId)",
-          { requestId: options.requestId },
-        );
-      }
-
-      if (options.exportId) {
-        query.andWhere(
-          "(audit_log.metadata->>'exportId' = :exportId OR audit_log.metadata->>'entityId' = :exportId)",
-          {
-            exportId: options.exportId,
-          },
-        );
-      }
-
-      if (options.templateKey) {
-        query.andWhere("audit_log.metadata->>'templateKey' = :templateKey", {
-          templateKey: options.templateKey,
-        });
-      }
-
-      if (options.templateVersion) {
-        query.andWhere(
-          "audit_log.metadata->>'templateVersion' = :templateVersion",
-          {
-            templateVersion: options.templateVersion,
-          },
-        );
-      }
-
-      if (options.search) {
-        const search = options.search.trim();
-        if (search) {
-          query.andWhere(
-            `(${[
-              'audit_log.action::text ILIKE :search',
-              'audit_log.entity_type ILIKE :search',
-              'audit_log.entity_id ILIKE :search',
-              'audit_log.notes ILIKE :search',
-              'audit_log.request_id ILIKE :search',
-              'admin.username ILIKE :search',
-              'audit_log.metadata::text ILIKE :search',
-            ].join(' OR ')})`,
-            { search: `%${search}%` },
-          );
-        }
-      }
-
-      if (options.startDate) {
-        query.andWhere('audit_log.createdAt >= :startDate', {
-          startDate: options.startDate,
-        });
-      }
-
-      if (options.endDate) {
-        query.andWhere('audit_log.createdAt <= :endDate', {
-          endDate: options.endDate,
-        });
-      }
-
-      const sortOrder = options.sortOrder === 'ASC' ? 'ASC' : 'DESC';
-      const sortColumn =
-        options.sortBy === 'actor'
-          ? 'admin.username'
-          : options.sortBy === 'action'
-            ? 'audit_log.action'
-            : options.sortBy === 'target'
-              ? 'audit_log.entity_type'
-              : 'audit_log.createdAt';
-      query.orderBy(sortColumn, sortOrder);
-      if (options.sortBy === 'target') {
-        query.addOrderBy('audit_log.entity_id', sortOrder);
-      }
-      if (options.sortBy && options.sortBy !== 'createdAt') {
-        query.addOrderBy('audit_log.createdAt', 'DESC');
-      }
-      query.limit(options.limit || 100);
-      query.offset(options.offset || 0);
-
-      const [logs, total] = await query.getManyAndCount();
-
-      return {
-        logs,
-        total,
-        limit: options.limit || 100,
-        offset: options.offset || 0,
-      };
-    } catch (error: unknown) {
-      this.logger.error(
-        `Failed to get audit logs: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      return {
-        logs: [],
-        total: 0,
-        limit: options.limit || 100,
-        offset: options.offset || 0,
-      };
-    }
-  }
-
-  /**
-   * Get audit log statistics
-   */
-  async getStatistics(startDate?: Date, endDate?: Date) {
-    try {
-      // Create a base query for counting total logs
-      const countQuery =
-        this.auditLogRepository.createQueryBuilder('audit_log');
-
-      if (startDate) {
-        countQuery.andWhere('audit_log.createdAt >= :startDate', { startDate });
-      }
-
-      if (endDate) {
-        countQuery.andWhere('audit_log.createdAt <= :endDate', { endDate });
-      }
-
-      // Get total count before modifying the query for group by
-      const totalLogs = await countQuery.getCount();
-
-      // Create a separate query for action type counts (with group by)
-      const statsQuery =
-        this.auditLogRepository.createQueryBuilder('audit_log');
-
-      if (startDate) {
-        statsQuery.andWhere('audit_log.createdAt >= :startDate', { startDate });
-      }
-
-      if (endDate) {
-        statsQuery.andWhere('audit_log.createdAt <= :endDate', { endDate });
-      }
-
-      const actionTypeCounts = await statsQuery
-        .select('audit_log.action', 'actionType')
-        .addSelect('COUNT(*)', 'count')
-        .groupBy('audit_log.action')
-        .getRawMany();
-
-      return {
-        totalLogs,
-        actionTypeCounts,
-      };
-    } catch (error: unknown) {
-      this.logger.error(
-        `Failed to get audit log statistics: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      return {
-        totalLogs: 0,
-        actionTypeCounts: [],
-      };
-    }
-  }
-
-  async getObservabilityMetrics(startDate?: Date, endDate?: Date) {
-    const [statistics, recentFailures] = await Promise.all([
-      this.getStatistics(startDate, endDate),
-      this.findAll({
-        startDate,
-        endDate,
-        search: 'failed',
-        limit: 10,
-        offset: 0,
-      }),
-    ]);
-
-    return {
-      audit: {
-        totalLogs: statistics.totalLogs,
-        actionTypeCounts: statistics.actionTypeCounts,
-      },
-      failures: {
-        total: recentFailures.total,
-        recent: recentFailures.logs,
-      },
-      generatedAt: new Date().toISOString(),
-    };
-  }
-
-  async getTemplateRolloutHistory(options: {
-    templateKey?: string;
-    templateVersion?: string;
-    actorId?: string;
-    startDate?: Date;
-    endDate?: Date;
-    limit?: number;
-    offset?: number;
-  }) {
-    try {
-      const rolloutActionTypes: AuditActionType[] = [
-        AuditActionType.TEMPLATE_STATE_TRANSITION,
-        AuditActionType.TEMPLATE_ROLLOUT_KILLSWITCH,
-        AuditActionType.TEMPLATE_FALLBACK_ACTIVATED,
-        AuditActionType.TEMPLATE_ROLLOUT_DIFF_RECORDED,
-      ];
-
-      const query = this.auditLogRepository
-        .createQueryBuilder('audit_log')
-        .leftJoinAndSelect('audit_log.admin', 'admin')
-        .where('audit_log.action IN (:...actionTypes)', {
-          actionTypes: rolloutActionTypes,
-        });
-
-      if (options.templateKey) {
-        query.andWhere("audit_log.metadata->>'templateKey' = :templateKey", {
-          templateKey: options.templateKey,
-        });
-      }
-
-      if (options.templateVersion) {
-        query.andWhere(
-          "audit_log.metadata->>'templateVersion' = :templateVersion",
-          {
-            templateVersion: options.templateVersion,
-          },
-        );
-      }
-
-      if (options.actorId) {
-        const normalizedActorId = this.toNullableUserId(options.actorId);
-        query.andWhere(
-          normalizedActorId === null
-            ? "audit_log.metadata->>'actorId' = :actorIdRaw"
-            : "(audit_log.admin_id = :actorId OR audit_log.metadata->>'actorId' = :actorIdRaw)",
-          { actorId: normalizedActorId, actorIdRaw: options.actorId },
-        );
-      }
-
-      if (options.startDate) {
-        query.andWhere('audit_log.createdAt >= :startDate', {
-          startDate: options.startDate,
-        });
-      }
-
-      if (options.endDate) {
-        query.andWhere('audit_log.createdAt <= :endDate', {
-          endDate: options.endDate,
-        });
-      }
-
-      query.orderBy('audit_log.createdAt', 'DESC');
-      query.limit(options.limit || 100);
-      query.offset(options.offset || 0);
-
-      const [logs, total] = await query.getManyAndCount();
-
-      return {
-        logs,
-        total,
-        limit: options.limit || 100,
-        offset: options.offset || 0,
-      };
-    } catch (error: unknown) {
-      this.logger.error(
-        `Failed to get template rollout history: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      return {
-        logs: [],
-        total: 0,
-        limit: options.limit || 100,
-        offset: options.offset || 0,
-      };
-    }
-  }
-
-  async getExportAccessTrail(options: {
-    requestId?: string;
-    exportId?: string;
-    actorId?: string;
-    actorType?: ExportActorType;
-    startDate?: Date;
-    endDate?: Date;
-    limit?: number;
-    offset?: number;
-  }) {
-    try {
-      const exportActionTypes: AuditActionType[] = [
-        AuditActionType.EXPORT_REQUEST_CREATED,
-        AuditActionType.EXPORT_GENERATION_COMPLETED,
-        AuditActionType.EXPORT_LINK_REFRESHED,
-        AuditActionType.EXPORT_DOWNLOADED,
-      ];
-
-      const query = this.auditLogRepository
-        .createQueryBuilder('audit_log')
-        .leftJoinAndSelect('audit_log.admin', 'admin')
-        .where('audit_log.action IN (:...actionTypes)', {
-          actionTypes: exportActionTypes,
-        })
-        .andWhere('audit_log.entity_type = :entityType', {
-          entityType: 'data_export',
-        });
-
-      if (options.requestId) {
-        query.andWhere(
-          "(audit_log.request_id = :requestId OR audit_log.metadata->>'requestId' = :requestId)",
-          { requestId: options.requestId },
-        );
-      }
-
-      if (options.exportId) {
-        query.andWhere(
-          "(audit_log.metadata->>'exportId' = :exportId OR audit_log.metadata->>'entityId' = :exportId)",
-          {
-            exportId: options.exportId,
-          },
-        );
-      }
-
-      if (options.actorId) {
-        const normalizedActorId = this.toNullableUserId(options.actorId);
-        query.andWhere(
-          normalizedActorId === null
-            ? "audit_log.metadata->>'actorId' = :actorIdRaw"
-            : "(audit_log.admin_id = :actorId OR audit_log.metadata->>'actorId' = :actorIdRaw)",
-          { actorId: normalizedActorId, actorIdRaw: options.actorId },
-        );
-      }
-
-      if (options.actorType) {
-        query.andWhere("audit_log.metadata->>'actorType' = :actorType", {
-          actorType: options.actorType,
-        });
-      }
-
-      if (options.startDate) {
-        query.andWhere('audit_log.createdAt >= :startDate', {
-          startDate: options.startDate,
-        });
-      }
-
-      if (options.endDate) {
-        query.andWhere('audit_log.createdAt <= :endDate', {
-          endDate: options.endDate,
-        });
-      }
-
-      query.orderBy('audit_log.createdAt', 'DESC');
-      query.limit(options.limit || 100);
-      query.offset(options.offset || 0);
-
-      const [logs, total] = await query.getManyAndCount();
-
-      return {
-        logs,
-        total,
-        limit: options.limit || 100,
-        offset: options.offset || 0,
-      };
-    } catch (error: unknown) {
-      this.logger.error(
-        `Failed to get export access trail: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      return {
-        logs: [],
-        total: 0,
-        limit: options.limit || 100,
-        offset: options.offset || 0,
-      };
-    }
-  }
-
-  private createActor(
-    type: AuditActorType,
-    id: string | number,
-    overrides?: {
-      userId?: string | number | null;
-      label?: string;
-      source?: string | null;
-    },
-  ): AuditActor {
-    const actorId = String(id);
-    const actorUserId =
-      overrides?.userId !== undefined
-        ? overrides.userId === null ||
-          overrides.userId === undefined ||
-          overrides.userId === ''
-          ? null
-          : String(overrides.userId)
-        : type === 'user' || type === 'admin'
-          ? actorId
-          : null;
-
-    return {
-      type,
-      id: actorId,
-      userId: actorUserId,
-      label: overrides?.label,
-      source: overrides?.source,
-    };
-  }
-
-  private resolveActor(dto: CreateAuditLogDto): AuditActor | null {
-    if (dto.context?.actor?.id) {
-      return dto.context.actor;
-    }
-
-    const metadataActorType = dto.metadata?.actorType as
-      | AuditActorType
-      | undefined;
-    const metadataActorId = dto.metadata?.actorId
-      ? String(dto.metadata.actorId)
-      : undefined;
-
-    if (metadataActorType && metadataActorId) {
-      return this.createActor(metadataActorType, metadataActorId, {
-        userId:
-          metadataActorType === 'user' || metadataActorType === 'admin'
-            ? metadataActorId
-            : null,
-        label: dto.metadata?.actorLabel as string | undefined,
-        source: dto.metadata?.actorSource as string | null | undefined,
-      });
-    }
-
-    if (dto.context?.userId) {
-      return this.createActor('user', String(dto.context.userId), {
-        userId: dto.context.userId,
-      });
-    }
-
-    return null;
+    });
   }
 }

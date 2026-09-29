@@ -77,6 +77,64 @@ To avoid these issues in the future:
 - **Verify the network icon** in your wallet before approving transactions
 - **Clear cache periodically** if you experience strange behavior
 
+## Account Merge and Anonymous Identity Transfer
+
+If you used Xconfess anonymously (without connecting a wallet) and later connect an authenticated account, you may want to merge the two identities so that your anonymous activity is owned by your authenticated account. Merging is explicit, confirmed, and reversible where possible.
+
+### What Can Be Merged
+
+The merge workflow covers the following record types. Each is handled with its own conflict rules:
+
+- **Usernames**: The authenticated account's username wins. If the anonymous identity has a username that is not taken, it is retained as an alias.
+- **Messages**: Messages authored by the anonymous identity are reassigned to the authenticated account. Duplicate messages (same content, same counterparty, within the merge window) are collapsed to a single record.
+- **Drafts**: Drafts are reassigned. If both identities have a draft with the same identifier, the authenticated account's draft is kept and the anonymous draft is retained as a conflict record for review.
+- **Tips**: Tips sent or received by the anonymous identity are reassigned. Tips are never duplicated; if a tip already exists under the authenticated account, the anonymous tip is discarded and the conflict is logged.
+- **Anchors**: On-chain anchors are immutable. The anonymous identity's anchors are re-pointed to the authenticated account in the local index only; the chain record is never rewritten.
+
+### Conflict Handling
+
+Conflicts are surfaced before any data is moved. The merge preview lists every conflict with:
+
+- The record type and identifier
+- The authenticated account's value and the anonymous identity's value
+- The proposed resolution (keep authenticated, keep anonymous, or retain both)
+
+You must explicitly confirm the resolution for each conflict class before the merge proceeds. Unresolved conflicts block the merge.
+
+### Confirmation and Rollback
+
+1. Start the merge from **Settings → Account → Merge anonymous activity**.
+2. Review the preview and resolve each conflict class.
+3. Confirm the merge. The confirmation is recorded with a merge request ID.
+4. The merge runs as an atomic job where possible. Record types that cannot be moved atomically (for example, on-chain anchors) are processed in a separate, idempotent step.
+5. If the job fails partway through, it can be retried from its last recorded state. A rollback restores the pre-merge ownership for all record types that were moved in the failed run.
+
+### Authorization
+
+- Only the authenticated account that initiated the merge can confirm it.
+- A merge attempt from an identity that does not own the anonymous session fails with a generic authorization error and is logged.
+- Merge attempts are rate-limited per account and per source.
+- Anonymous sessions that have already been merged cannot be merged again; a second attempt fails and is logged.
+
+### Audit Evidence
+
+Every merge records audit evidence that is retained for the configured retention window:
+
+- The merge request ID
+- The initiating account and the anonymous session identifier (hashed)
+- The conflict resolutions chosen
+- The record types moved, skipped, or rolled back
+- The outcome of each step (success, failure, retry)
+
+Audit records never contain raw credentials or full identifiers; identifiers are hashed or truncated.
+
+### If a Merge Goes Wrong
+
+1. Open **Settings → Account → Merge history** and locate the merge request ID.
+2. If the merge is still processing, wait for it to finish or fail.
+3. If the merge failed, retry it from the last recorded state.
+4. If the merge completed but the result is wrong, request a rollback and reference the merge request ID.
+5. Contact support with the merge request ID if you cannot resolve the issue yourself.
 
 ## Identity Enumeration Resistance
 
@@ -91,6 +149,7 @@ For every identity-bearing endpoint, the response for an existing identity and a
 
 
 - **Status code**: The same HTTP status is returned in both cases (for example, `200` for login and recovery initiation, `202` for registration, `401` for authentication failures).
+- **Merge endpoints**: Merge initiation, preview, confirmation, and rollback return the same status and body whether or not the referenced anonymous session exists, so that merge endpoints cannot be used to enumerate anonymous sessions.
 - **Response body**: The same shape and the same generic message are returned. Messages never say "user not found", "email already registered", or "incorrect password"; they use a single neutral message such as "If an account exists, we've sent instructions."
 - **Headers**: Response headers (including `Content-Length`, `Content-Type`, and any rate-limit headers) are identical in both cases. Rate-limit headers reflect the caller's budget, not the identity's existence.
 - **Timing budget**: The endpoint performs the same work (including a dummy hash or lookup) in both cases so that response time does not leak existence. Measured latency for existing and non-existing identities must stay within a configured timing budget.
