@@ -214,13 +214,13 @@ export class AuditLogService {
       }
 
       this.logger.log(
-        `Audit log created: ${dto.actionType} by ${actor?.type || 'anonymous'} ${actor?.id || dto.context?.userId || 'anonymous'}`,
+        `Audit log created: ${dto.actionType} by ${actor?.type || 'anonymous'} ${this.redaction.maskIdentifier(actor?.id || dto.context?.userId || 'anonymous')}`,
       );
     } catch (error: unknown) {
       // Log the error but don't throw to prevent disrupting the main operation
       this.logger.error(
-        `Failed to create audit log for action ${dto.actionType}: ${error instanceof Error ? error.message : 'unknown error'}`,
-        error instanceof Error ? error.stack : undefined,
+        `Failed to create audit log for action ${dto.actionType}: ${this.redaction.redactErrorMessage(error instanceof Error ? error.message : 'unknown error')}`,
+        error instanceof Error ? this.redaction.redactErrorMessage(error.stack || '') : undefined,
       );
     }
   }
