@@ -389,6 +389,62 @@ export class AuthController {
     return { success: true, message: 'Logged out successfully' };
   }
 
+  @Post('logout-all')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Revoke all sessions for the current user',
+    description:
+      'Invalidates every previously issued session token for the user. ' +
+      'Replayed tokens will be rejected by the JWT guard.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'All sessions revoked.',
+    schema: { example: { message: 'All sessions revoked', revoked: 3 } },
+  })
+  async logoutAll(
+    @GetUser('id') userId: number,
+  ): Promise<{ message: string; revoked: number }> {
+    const revoked = await this.authService.revokeAllSessions(userId);
+    return { message: 'All sessions revoked', revoked };
+  }
+
+  @Post('sessions/revoke')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Admin-safe session invalidation for a target user',
+    description:
+      'Revokes all sessions for the target user. Requires the caller to be ' +
+      'an admin. Audit events are emitted without token material.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Target user sessions revoked.',
+    schema: { example: { message: 'Sessions revoked', revoked: 2 } },
+  })
+  @ApiResponse({ status: 403, description: 'Caller is not an admin.' })
+  async revokeUserSessions(
+    @GetUser() actor: User,
+    @Body() body: { userId: number; reason?: string },
+  ): Promise<{ message: string; revoked: number }> {
+    if (!actor || actor.role !== 'admin') {
+      throw new UnauthorizedException('Admin privileges required');
+    }
+    if (!body || typeof body.userId !== 'number') {
+      throw new BadRequestException('Missing target userId');
+    }
+
+    const revoked = await this.authService.revokeAllSessions(body.userId, {
+      actorId: actor.id,
+      reason: body.reason ?? 'admin-revocation',
+    });
+    return { message: 'Sessions revoked', revoked };
+  }
+
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)
   @RateLimit(3, 300)

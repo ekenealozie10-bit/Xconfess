@@ -311,12 +311,14 @@ export class AuthService {
     const role = user.role || UserRole.USER;
     const scopes =
       role === UserRole.ADMIN ? getDefaultAdminStellarInvocationScopes() : [];
+    const session = this.createSession(user.id);
     const payload: JwtPayload = {
       email: user.email,
       sub: user.id,
       username: user.username,
       role,
       scopes,
+      sid: session.id,
     };
     this.analyticsEventService
       ?.record({
@@ -397,6 +399,9 @@ export class AuthService {
       }
 
       await this.userService.updatePassword(reset.userId, newPassword);
+
+      // Password reset invalidates all prior sessions.
+      this.revokeUserSessions(reset.userId, 'password_reset');
 
       this.logger.log(`Password reset successful`, {
         maskedUserId: maskUserId(reset.userId),
