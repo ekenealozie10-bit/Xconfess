@@ -10,6 +10,7 @@ import {
   UseGuards,
   UnauthorizedException,
   HttpException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import {
@@ -25,6 +26,7 @@ import * as QRCode from 'qrcode';
 import { AuthService } from './auth.service';
 import { StepUpService } from './step-up.service';
 import { StepUpDto } from './dto/step-up.dto';
+import { MergeAnonymousDto } from './dto/merge-anonymous.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { LoginDto } from './dto/login.dto';
@@ -32,6 +34,7 @@ import { JwtAuthGuard } from './jwt-auth.guard';
 import { GetUser } from './get-user.decorator';
 import { User } from '../user/entities/user.entity';
 import { RateLimit } from './guard/rate-limit.decorator';
+import { AnonymousMergeService } from './anonymous-merge.service';
 
 @ApiTags('Auth')
 @Controller('auth')
@@ -39,6 +42,7 @@ export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly stepUpService: StepUpService,
+    private readonly anonymousMergeService: AnonymousMergeService,
   ) {}
 
   @Post('step-up')
@@ -383,6 +387,102 @@ export class AuthController {
       throw new BadRequestException(
         'Failed to reset password: ' + errorMessage,
       );
+    }
+  }
+
+  @Post('merge-anonymous')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  @RateLimit(3, 300)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Merge an anonymous identity into the authenticated account',
+    description:
+      'Transfers ownership of anonymous activity (usernames, messages, ' +
+      'drafts, tips, anchors) to the authenticated user. Conflicts are ' +
+      'surfaced for explicit confirmation; unauthorized attempts fail; ' +
+      'an audit record is retained and partial failures roll back.',
+  })
+  @ApiBody({ type: MergeAnonymousDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Merge completed or conflicts reported for confirmation.',
+    schema: {
+      example: {
+        status: 'merged',
+        mergeId: 'mrg_9f2a1c',
+        transferred: {
+          usernames: 1,
+          messages: 12,
+          drafts: 3,
+          tips: 4,
+          anchors: 2,
+        },
+        conflicts: [],
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: 'Invalid merge request.' })
+  @ApiResponse({ status: 401, description: 'Unauthorized — missing or invalid JWT.' })
+  @ApiResponse({
+    status: 403,
+    description: 'Forbidden — anonymous identity does not belong to caller.',
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'Conflicts detected; explicit confirmation required.',
+  })
+  async mergeAnonymous(
+    @GetUser('id') userId: number,
+    @Body() dto: MergeAnonymousDto,
+  ): Promise<any> {
+    if (!dto?.anonymousUserId) {
+      throw new BadRequestException('Missing anonymousUserId');
+    }
+
+    const ownership = await this.anonymousMergeService.assertOwnership(
+      userId,
+      dto.anonymousUserId,
+    );
+    if (!ownership) {
+      throw new ForbiddenException(
+        'Anonymous identity does not belong to the authenticated user',
+      );
+    }
+
+    try {
+      const result = await this.anonymousMergeService.merge(
+        userId,
+        dto.anonymousUserId,
+        {
+          confirmConflicts: dto.confirmConflicts === true,
+          strategy: dto.strategy,
+          actorIp: dto.actorIp,
+        },
+      );
+
+      if (result.status === 'conflicts') {
+        throw new HttpException(
+          {
+            status: 'conflicts',
+            mergeId: result.mergeId,
+            conflicts: result.conflicts,
+            message:
+              'Conflicts detected. Re-submit with confirmConflicts=true to proceed.',
+          },
+          HttpStatus.CONFLICT,
+        );
+      }
+
+      return result;
+    } catch (error) {
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      const errorMessage =
+        error instanceof Error ? error.message : 'Unknown error';
+      throw new BadRequestException('Merge failed: ' + errorMessage);
     }
   }
 }

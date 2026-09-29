@@ -27,9 +27,54 @@ import { HttpStatus } from '@nestjs/common';
 import { getDefaultAdminStellarInvocationScopes } from '../stellar/stellar-invocation-policy';
 import { AnalyticsEventService } from '../analytics/analytics-event.service';
 
+export interface MergeConflict {
+  type:
+    | 'username'
+    | 'message'
+    | 'draft'
+    | 'tip'
+    | 'anchor';
+  sourceId: string;
+  targetId: string;
+  details: Record<string, unknown>;
+}
+
+export interface MergeResolution {
+  conflictId: string;
+  resolution: 'use_source' | 'use_target' | 'merge' | 'skip';
+}
+
+export interface MergePreviewResult {
+  sourceAnonymousUserId: string;
+  targetUserId: number;
+  conflicts: MergeConflict[];
+  autoResolvable: boolean;
+}
+
+export interface MergeResult {
+  success: boolean;
+  targetUserId: number;
+  sourceAnonymousUserId: string;
+  transferred: Record<string, number>;
+  conflicts: MergeConflict[];
+  auditId: string;
+  rolledBack: boolean;
+}
+
+export interface MergeAuditEntry {
+  id: string;
+  timestamp: string;
+  actorUserId: number;
+  sourceAnonymousUserId: string;
+  targetUserId: number;
+  outcome: 'success' | 'failure' | 'rollback';
+  details: Record<string, unknown>;
+}
+
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
+  private readonly mergeAuditLog: MergeAuditEntry[] = [];
 
   constructor(
     private userService: UserService,
@@ -51,7 +96,7 @@ export class AuthService {
       if (!user.is_active) {
         throw new AppException(
           'Account is deactivated. Please reactivate your account to continue.',
-          ErrorCode.AUTH_ACCOUNT_DEACTIVATED,
+          ErrorCode.AUTH_ACCOUNT_DEVACTIVATED,
           HttpStatus.UNAUTHORIZED,
         );
       }
@@ -60,7 +105,7 @@ export class AuthService {
         user.emailIv,
         user.emailTag,
       );
-      // resetPasswordToken and resetPasswordExpires are internal â€” never sent to clients.
+      // resetPasswordToken and resetPasswordExpires are internal — never sent to clients.
       return {
         id: user.id,
         username: user.username,
@@ -155,7 +200,7 @@ export class AuthService {
     const expiresAt = new Date();
     expiresAt.setHours(expiresAt.getHours() + 1);
 
-    // Token stored internally â€” never returned to caller or serialized to HTTP response.
+    // Token stored internally — never returned to caller or serialized to HTTP response.
     await this.userService.setResetPasswordToken(user.id, token, expiresAt);
     return token;
   }
@@ -240,7 +285,7 @@ export class AuthService {
         user.emailIv,
         user.emailTag,
       );
-      // resetPasswordToken and resetPasswordExpires are internal â€” never sent to clients.
+      // resetPasswordToken and resetPasswordExpires are internal — never sent to clients.
       return {
         id: user.id,
         username: user.username,
@@ -347,4 +392,441 @@ export class AuthService {
       };
     }
   }
+
+  /**
+   * Previews a merge between an anonymous identity and an authenticated account.
+   * Surfaces conflicts without mutating any data.
+   */
+  async previewMerge(
+    actorUserId: number,
+    sourceAnonymousUserId: string,
+  ): Promise<MergePreviewResult> {
+    const targetUser = await this.userService.findById(actorUserId);
+    if (!targetUser || !targetUser.is_active) {
+      throw new AppException(
+        'Authenticated account not found or inactive',
+        ErrorCode.AUTH_UNAUTHORIZED,
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+
+    const sourceAnonymousUser =
+      await this.anonymousUserService.findById(sourceAnonymousUserId);
+    if (!sourceAnonymousUser) {
+      throw new AppException(
+        'Anonymous identity not found',
+        ErrorCode.NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    if (sourceAnonymousUser.ownerUserId === actorUserId) {
+      throw new AppException(
+        'Anonymous identity is already owned by this account',
+        ErrorCode.BAD_REQUEST,
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    if (
+      sourceAnonymousUser.ownerUserId !== null &&
+      sourceAnonymousUser.ownerUserId !== actorUserId
+    ) {
+      throw new AppException(
+        'Anonymous identity is owned by another account',
+        ErrorCode.AUTH_FORBIDDEN,
+        HttpStatus.FORBIDDEN,
+      );
+    }
+
+    const conflicts = await this.detectMergeConflicts(
+      sourceAnonymousUserId,
+      actorUserId,
+    );
+
+    return {
+      sourceAnonymousUserId,
+      targetUserId: actorUserId,
+      conflicts,
+      autoResolvable: conflicts.length === 0,
+    };
+  }
+
+  /**
+   * Atomically transfers ownership of an anonymous identity to an authenticated account.
+   * Requires explicit confirmation and resolution for all conflicts.
+   */
+  async mergeAnonymousIdentity(
+    actorUserId: number,
+    sourceAnonymousUserId: string,
+    confirmation: { confirmed: boolean; resolutions?: MergeResolution[] },
+  ): Promise<MergeResult> {
+    const auditId = crypto.randomUUID();
+    const timestamp = new Date().toISOString();
+
+    if (!confirmation || confirmation.confirmed !== true) {
+      this.recordAudit({
+        id: auditId,
+        timestamp,
+        actorUserId,
+        sourceAnonymousUserId,
+        targetUserId: actorUserId,
+        outcome: 'failure',
+        details: { reason: 'confirmation_required' },
+      });
+      throw new AppException(
+        'Explicit confirmation is required to merge identities',
+        ErrorCode.BAD_REQUEST,
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const targetUser = await this.userService.findById(actorUserId);
+    if (!targetUser || !targetUser.is_active) {
+      this.recordAudit({
+        id: auditId,
+        timestamp,
+        actorUserId,
+        sourceAnonymousUserId,
+        targetUserId: actorUserId,
+        outcome: 'failure',
+        details: { reason: 'unauthorized_actor' },
+      });
+      throw new AppException(
+        'Authenticated account not found or inactive',
+        ErrorCode.AUTH_UNAUTHORIZED,
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+
+    const sourceAnonymousUser =
+      await this.anonymousUserService.findById(sourceAnonymousUserId);
+    if (!sourceAnonymousUser) {
+      this.recordAudit({
+        id: auditId,
+        timestamp,
+        actorUserId,
+        sourceAnonymousUserId,
+        targetUserId: actorUserId,
+        outcome: 'failure',
+        details: { reason: 'source_not_found' },
+      });
+      throw new AppException(
+        'Anonymous identity not found',
+        ErrorCode.NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    if (
+      sourceAnonymousUser.ownerUserId !== null &&
+      sourceAnonymousUser.ownerUserId !== actorUserId
+    ) {
+      this.recordAudit({
+        id: auditId,
+        timestamp,
+        actorUserId,
+        sourceAnonymousUserId,
+        targetUserId: actorUserId,
+        outcome: 'failure',
+        details: {
+          reason: 'source_owned_by_other',
+          ownerUserId: sourceAnonymousUser.ownerUserId,
+        },
+      });
+      throw new AppException(
+        'Anonymous identity is owned by another account',
+        ErrorCode.AUTH_FORBIDDEN,
+        HttpStatus.FORBIDDEN,
+      );
+    }
+
+    const conflicts = await this.detectMergeConflicts(
+      sourceAnonymousUserId,
+      actorUserId,
+    );
+
+    const resolutionMap = new Map<string, MergeResolution>();
+    for (const r of confirmation.resolutions ?? []) {
+      resolutionMap.set(r.conflictId, r);
+    }
+
+    const unresolved = conflicts.filter((c) => !resolutionMap.has(conflictId(c)));
+    if (unresolved.length > 0) {
+      this.recordAudit({
+        id: auditId,
+        timestamp,
+        actorUserId,
+        sourceAnonymousUserId,
+        targetUserId: actorUserId,
+        outcome: 'failure',
+        details: {
+          reason: 'unresolved_conflicts',
+          conflicts: unresolved.map(conflictId),
+        },
+      });
+      throw new AppException(
+        'Unresolved merge conflicts must be resolved before merging',
+        ErrorCode.CONFLICT,
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    const snapshot = await this.captureMergeSnapshot(
+      sourceAnonymousUserId,
+      actorUserId,
+    );
+
+    try {
+      const transferred = await this.applyMergeTransfer(
+        sourceAnonymousUserId,
+        actorUserId,
+        conflicts,
+        resolutionMap,
+      );
+
+      await this.anonymousUserService.assignOwner(
+        sourceAnonymousUserId,
+        actorUserId,
+      );
+
+      this.recordAudit({
+        id: auditId,
+        timestamp,
+        actorUserId,
+        sourceAnonymousUserId,
+        targetUserId: actorUserId,
+        outcome: 'success',
+        details: { transferred, conflicts: conflicts.length },
+      });
+
+      this.analyticsEventService
+        ?.record({
+          eventName: 'anonymous_identity_merged',
+          actorId: `user:${actorUserId}`,
+          metadata: { conflicts: conflicts.length },
+        })
+        .catch((err) =>
+          this.logger.warn(
+            `Failed to record merge analytics: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          ),
+        );
+
+      return {
+        success: true,
+        targetUserId: actorUserId,
+        sourceAnonymousUserId,
+        transferred,
+        conflicts,
+        auditId,
+        rolledBack: false,
+      };
+    } catch (error) {
+      await this.rollbackMerge(snapshot);
+      this.recordAudit({
+        id: auditId,
+        timestamp,
+        actorUserId,
+        sourceAnonymousUserId,
+        targetUserId: actorUserId,
+        outcome: 'rollback',
+        details: {
+          reason: error instanceof Error ? error.message : 'unknown',
+        },
+      });
+      throw new AppException(
+        'Merge failed and was rolled back',
+        ErrorCode.INTERNAL_SERVER_ERROR,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  getMergeAuditLog(actorUserId: number): MergeAuditEntry[] {
+    return this.mergeAuditLog.filter((e) => e.actorUserId === actorUserId);
+  }
+
+  private recordAudit(entry: MergeAuditEntry): void {
+    this.mergeAuditLog.push(entry);
+    this.logger.log(`identity-merge audit ${entry.outcome}`, {
+      auditId: entry.id,
+      actorUserId: maskUserId(entry.actorUserId),
+      sourceAnonymousUserId: entry.sourceAnonymousUserId,
+      outcome: entry.outcome,
+    });
+  }
+
+  private async detectMergeConflicts(
+    sourceAnonymousUserId: string,
+    targetUserId: number,
+  ): Promise<MergeConflict[]> {
+    const conflicts: MergeConflict[] = [];
+
+    const sourceUsername =
+      await this.anonymousUserService.getDisplayName(sourceAnonymousUserId);
+    const targetUsername = await this.userService.getUsername(targetUserId);
+    if (sourceUsername && targetUsername && sourceUsername !== targetUsername) {
+      conflicts.push({
+        type: 'username',
+        sourceId: sourceAnonymousUserId,
+        targetId: String(targetUserId),
+        details: { sourceUsername, targetUsername },
+      });
+    }
+
+    const sourceCounts = await this.anonymousUserService.getActivityCounts(
+      sourceAnonymousUserId,
+    );
+    const targetCounts = await this.userService.getActivityCounts(targetUserId);
+
+    const check = (
+      type: MergeConflict['type'],
+      sourceCount: number,
+      targetCount: number,
+    ) => {
+      if (sourceCount > 0 && targetCount > 0) {
+        conflicts.push({
+          type,
+          sourceId: sourceAnonymousUserId,
+          targetId: String(targetUserId),
+          details: { sourceCount, targetCount },
+        });
+      }
+    };
+
+    check('message', sourceCounts.messages, targetCounts.messages);
+    check('draft', sourceCounts.drafts, targetCounts.drafts);
+    check('tip', sourceCounts.tips, targetCounts.tips);
+    check('anchor', sourceCounts.anchors, targetCounts.anchors);
+
+    return conflicts;
+  }
+
+  private async captureMergeSnapshot(
+    sourceAnonymousUserId: string,
+    targetUserId: number,
+  ): Promise<{
+    sourceOwnerUserId: number | null;
+    targetCounts: Record<string, number>;
+  }> {
+    const source = await this.anonymousUserService.findById(sourceAnonymousUserId);
+    const targetCounts = await this.userService.getActivityCounts(targetUserId);
+    return {
+      sourceOwnerUserId: source ? source.ownerUserId : null,
+      targetCounts: targetCounts as unknown as Record<string, number>,
+    };
+  }
+
+  private async applyMergeTransfer(
+    sourceAnonymousUserId: string,
+    targetUserId: number,
+    conflicts: MergeConflict[],
+    resolutionMap: Map<string, MergeResolution>,
+  ): Promise<Record<string, number>> {
+    const transferred: Record<string, number> = {
+      messages: 0,
+      drafts: 0,
+      tips: 0,
+      anchors: 0,
+    };
+
+    const ownership = await this.anonymousUserService.getOwnershipRecord(
+      sourceAnonymousUserId,
+    );
+
+    for (const conflict of conflicts) {
+      const resolution = resolutionMap.get(conflictId(conflict))!;
+      await this.applyConflictResolution(
+        conflict,
+        resolution,
+        sourceAnonymousUserId,
+        targetUserId,
+        ownership,
+      );
+    }
+
+    const transferResult = await this.anonymousUserService.transferAssets(
+      sourceAnonymousUserId,
+      targetUserId,
+    );
+    transferred.messages = transferResult.messages;
+    transferred.drafts = transferResult.drafts;
+    transferred.tips = transferResult.tips;
+    transferred.anchors = transferResult.anchors;
+
+    return transferred;
+  }
+
+  private async applyConflictResolution(
+    conflict: MergeConflict,
+    resolution: MergeResolution,
+    sourceAnonymousUserId: string,
+    targetUserId: number,
+    ownership: Record<string, unknown>,
+  ): Promise<void> {
+    switch (conflict.type) {
+      case 'username':
+        if (resolution.resolution === 'use_source') {
+          await this.userService.setUsername(
+            targetUserId,
+            String(conflict.details.sourceUsername),
+          );
+        }
+        break;
+      case 'message':
+        await this.anonymousUserService.resolveConflict(
+          sourceAnonymousUserId,
+          targetUserId,
+          'message',
+          resolution.resolution,
+        );
+        break;
+      case 'draft':
+        await this.anonymousUserService.resolveConflict(
+          sourceAnonymousUserId,
+          targetUserId,
+          'draft',
+          resolution.resolution,
+        );
+        break;
+      case 'tip':
+        await this.anonymousUserService.resolveConflict(
+          sourceAnonymousUserId,
+          targetUserId,
+          'tip',
+          resolution.resolution,
+        );
+        break;
+      case 'anchor':
+        await this.anonymousUserService.resolveConflict(
+          sourceAnonymousUserId,
+          targetUserId,
+          'anchor',
+          resolution.resolution,
+        );
+        break;
+      default:
+        break;
+    }
+    ownership[conflictId(conflict)] = resolution.resolution;
+  }
+
+  private async rollbackMerge(snapshot: {
+    sourceOwnerUserId: number | null;
+    targetCounts: Record<string, number>;
+  }): Promise<void> {
+    this.logger.warn(`Rolling back identity merge`, {
+      sourceOwnerUserId: snapshot.sourceOwnerUserId,
+    });
+    await this.anonymousUserService.restoreOwner(
+      sourceOwnerUserId !== null ? String(snapshot.sourceOwnerUserId) : '',
+      snapshot.sourceOwnerUserId,
+    );
+  }
+}
+
+function conflictId(conflict: MergeConflict): string {
+  return `${conflict.type}:${conflict.sourceId}:${conflict.targetId}`;
 }
