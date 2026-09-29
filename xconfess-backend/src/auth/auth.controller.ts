@@ -358,6 +358,7 @@ export class AuthController {
 
   @Post('reset-password')
   @HttpCode(HttpStatus.OK)
+  @RateLimit(5, 300)
   @ApiOperation({ summary: 'Reset password using a token from the reset e-mail' })
   @ApiBody({ type: ResetPasswordDto })
   @ApiResponse({
@@ -375,14 +376,12 @@ export class AuthController {
         resetPasswordDto.newPassword,
       );
     } catch (error) {
-      if (error instanceof BadRequestException) {
+      if (error instanceof HttpException) {
         throw error;
       }
       const errorMessage =
         error instanceof Error ? error.message : 'Unknown error';
-      throw new BadRequestException(
-        'Failed to reset password: ' + errorMessage,
-      );
+      throw new BadRequestException('Reset password failed: ' + errorMessage);
     }
   }
 }

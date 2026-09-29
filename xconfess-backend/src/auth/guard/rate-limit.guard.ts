@@ -8,9 +8,41 @@ import {
 import { Reflector } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { Request } from 'express';
-import { getRateLimitConfig, RateLimitConfig } from '../../config/rate-limit.config';
-import { ErrorCode } from '../../common/errors/error-codes';
-import { RATE_LIMIT_KEY, RateLimitOptions } from './rate-limit.decorator';
+const getRateLimitConfig = (configService: ConfigService): RateLimitConfig => ({
+  postLimit: Number(configService.get('RATE_LIMIT_POST_LIMIT') ?? 10),
+  postWindow: Number(configService.get('RATE_LIMIT_POST_WINDOW') ?? 60),
+  getLimit: Number(configService.get('RATE_LIMIT_GET_LIMIT') ?? 100),
+  getWindow: Number(configService.get('RATE_LIMIT_GET_WINDOW') ?? 60),
+  messagePairLimit: Number(configService.get('RATE_LIMIT_PAIR_LIMIT') ?? 5),
+  messagePairWindow: Number(configService.get('RATE_LIMIT_PAIR_WINDOW') ?? 60),
+});
+
+export interface RateLimitConfig {
+  postLimit: number;
+  postWindow: number;
+  getLimit: number;
+  getWindow: number;
+  messagePairLimit: number;
+  messagePairWindow: number;
+}
+
+export const RATE_LIMIT_KEY = 'rate_limit_options';
+
+export interface RateLimitOptions {
+  limit?: number;
+  window?: number;
+  pairLimit?: number;
+  pairWindow?: number;
+}
+
+export const RateLimit = (options: RateLimitOptions = {}): MethodDecorator =>
+  (target, propertyKey, descriptor) => {
+    Reflect.defineMetadata(RATE_LIMIT_KEY, options, descriptor.value);
+  };
+
+export enum ErrorCode {
+  RATE_LIMIT_EXCEEDED = 'RATE_LIMIT_EXCEEDED',
+}
 
 interface RateLimitEntry {
   count: number;
@@ -21,6 +53,7 @@ interface RateLimitEntry {
 export class RateLimitGuard implements CanActivate {
   private rateLimitStore = new Map<string, RateLimitEntry>();
   private config: RateLimitConfig;
+  private cleanupInterval: NodeJS.Timeout | undefined;
 
   constructor(
     private reflector: Reflector,
@@ -28,7 +61,11 @@ export class RateLimitGuard implements CanActivate {
   ) {
     this.config = getRateLimitConfig(configService);
     // Clean up expired entries every minute
-    setInterval(() => this.cleanup(), 60000);
+    this.cleanupInterval = setInterval(() => this.cleanup(), 60000);
+    // Allow the process to exit in tests/serverless environments
+    if (typeof this.cleanupInterval.unref === 'function') {
+      this.cleanupInterval.unref();
+    }
   }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {

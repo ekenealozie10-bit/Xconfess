@@ -5,10 +5,12 @@ import {
   CreateDateColumn,
   ManyToOne,
   JoinColumn,
+  Index,
 } from 'typeorm';
 import { User } from '../../user/entities/user.entity';
 
 @Entity('password_resets')
+@Index(['selectorHash'])
 export class PasswordReset {
   @PrimaryGeneratedColumn()
   id: number;
@@ -22,11 +24,19 @@ export class PasswordReset {
   @Column({ unique: true })
   tokenHash: string;
 
+  /**
+   * Selector prefix of the raw token (e.g. first 16 hex chars). Stored for
+   * operational lookup and audit correlation without revealing the full
+   * token material. Not sufficient to reconstruct the token.
+   */
+  @Column({ type: 'varchar', length: 32, nullable: true })
+  selectorHash: string | null;
+
   @Column()
   userId: number;
 
   @ManyToOne(() => User)
-  @JoinColumn({ name: 'userId' })
+  @JoinColumn({ token: 'userId' })
   user: User;
 
   @Column({ type: 'timestamp' })

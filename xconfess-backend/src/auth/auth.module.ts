@@ -1,7 +1,7 @@
-﻿import { Module, forwardRef } from '@nestjs/common';
+ﻉimport { Module, forwardRef } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
-import { TypeOrmModule } from '@nestjs/typeorm';
+import { TypeOrmModule } from '@typeorm/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service';
 import { LockoutService } from './lockout.service';
@@ -15,12 +15,14 @@ import { StepUpGuard } from './guards/step-up.guard';
 import { UserModule } from '../user/user.module';
 import { EmailModule } from '../email/email.module';
 import { PasswordReset } from './entities/password-reset.entity';
+import { AnalyticsModule } from '../analytics/analytics.module';
 
 @Module({
   imports: [
     forwardRef(() => UserModule),
     CacheModule,
     EmailModule,
+    AnalyticsModule,
     PassportModule,
     TypeOrmModule.forFeature([PasswordReset]),
     JwtModule.registerAsync({
@@ -46,6 +48,7 @@ import { PasswordReset } from './entities/password-reset.entity';
     AuthService,
     LockoutService,
     JwtModule,
+    PasswordResetService,
     StepUpService,
     StepUpGuard,
     OptionalJwtAuthGuard,
