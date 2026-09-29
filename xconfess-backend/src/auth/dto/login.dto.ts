@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer';
-import { IsEmail, IsNotEmpty, IsString } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsString, MaxLength } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 /**
@@ -22,6 +22,7 @@ export class LoginDto {
   )
   @IsEmail({}, { message: 'email must be a valid e-mail address' })
   @IsNotEmpty({ message: 'email must not be empty' })
+  @MaxLength(254, { message: 'email must not exceed 254 characters' })
   email!: string;
 
   @ApiProperty({
@@ -30,5 +31,6 @@ export class LoginDto {
   })
   @IsString()
   @IsNotEmpty({ message: 'password must not be empty' })
+  @MaxLength(128, { message: 'password must not exceed 128 characters' })
   password!: string;
 }

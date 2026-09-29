@@ -74,32 +74,36 @@ export interface ExportLifecycleAuditRecord {
   context?: AuditLogContext;
 }
 
-export type PasswordResetLifecycleAction =
-  | 'reset_requested'
-  | 'reset_consumed'
-  | 'reset_expired'
-  | 'reset_invalidated'
-  | 'reset_rate_limited'
-  | 'reset_consume_failed';
+export type AccountMergeAction =
+  | 'merge_requested'
+  | 'merge_confirmed'
+  | 'merge_completed'
+  | 'merge_rolled_back'
+  | 'merge_failed'
+  | 'merge_conflict_detected'
+  | 'merge_unauthorized';
 
-export type PasswordResetActorType = AuditActorType;
+export interface AccountMergeConflictRecord {
+  entityType: 'username' | 'message' | 'draft' | 'tip' | 'anchor';
+  entityId?: string;
+  anonymousId?: string;
+  authenticatedId?: string;
+  resolution?: 'anonymous_wins' | 'authenticated_wins' | 'merged' | 'skipped';
+  details?: Record<string, unknown>;
+}
 
-export interface PasswordResetLifecycleAuditRecord {
-  action: PasswordResetLifecycleAction;
-  /**
-   * Opaque identifier for the reset request (e.g. a request id or the
-   * database row id). Must never contain the raw token or its hash.
-   */
-  requestId: string;
-  /**
-   * Optional account reference. When present it must be a non-reversible
-   * searchable reference (e.g. a user id or a hashed email diqest), never the
-   * raw email address.
-   */
-  accountRef?: string | null;
-  actorType: PasswordResetActorType;
-  actorId?: string | null;
-  occurredAt?: string;
+export interface AccountMergeAuditRecord {
+  action: AccountMergeAction;
+  mergeId: string;
+  anonymousId: string;
+  authenticatedId: string;
+  authMethod?: string;
+  confirmedAt?: string;
+  completedAt?: string;
+  conflicts?: AccountMergeConflictRecord[];
+  transferred?: Record<string, number>;
+  rollback?: Record<string, unknown>;
+  reason?: string;
   metadata?: Record<string, unknown>;
   context?: AuditLogContext;
 }
@@ -142,6 +146,7 @@ export class AuditLogService {
       metadata.confessionId,
       metadata.exportId,
       metadata.requestId,
+      metadata.mergeId,
     ];
 
     for (const candidate of candidates) {
@@ -159,6 +164,37 @@ export class AuditLogService {
   ): string | null {
     const value = metadata?.[key];
     return typeof value === 'string' && value.length > 0 ? value : null;
+  }
+
+  private createActor(
+    type: AuditActorType,
+    id: string,
+    options?: { userId?: string | null; label?: string; source?: string | null },
+  ): AuditActor {
+    return {
+      type,
+      id,
+      userId: options?.userId ?? null,
+      ...(options?.label ? { label: options.label } : {}),
+      ...(options?.source ? { source: options.source } : {}),
+    };
+  }
+
+  private resolveActor(dto: CreateAuditLogDto): AuditActor | null {
+    if (dto.context?.actor) {
+      return dto.context.actor;
+    }
+
+    const userId = dto.context?.userId;
+    if (userId === null || userId === undefined || userId === '') {
+      return null;
+    }
+
+    return {
+      type: 'user',
+      id: String(userId),
+      userId: String(userId),
+    };
   }
 
   /**
@@ -283,13 +319,13 @@ export class AuditLogService {
       }
 
       this.logger.log(
-        `Audit log created: ${dto.actionType} by ${actor?.type || 'anonymous'} ${actor?.id || dto.context?.userId || 'anonymous'}`,
+        `Audit log created: ${dto.actionType} by ${actor?.type || 'anonymous'} ${this.redaction.maskIdentifier(actor?.id || dto.context?.userId || 'anonymous')}`,
       );
     } catch (error: unknown) {
       // Log the error but don't throw to prevent disrupting the main operation
       this.logger.error(
-        `Failed to create audit log for action ${dto.actionType}: ${error instanceof Error ? error.message : 'unknown error'}`,
-        error instanceof Error ? error.stack : undefined,
+        `Failed to create audit log for action ${dto.actionType}: ${this.redaction.redactErrorMessage(error instanceof Error ? error.message : 'unknown error')}`,
+        error instanceof Error ? this.redaction.redactErrorMessage(error.stack || '') : undefined,
       );
     }
   }
@@ -314,38 +350,38 @@ export class AuditLogService {
     });
   }
 
-/**
- * Log a moderation item's state transition (pending/flagged/escalated/
- * resolved/hidden/rejected), including actor, previous/next state, and reason.
- */
-async logModerationStateTransition(
-  moderationLogId: string,
-  from: string,
-  to: string,
-  actorId: string,
-  reason: string,
-  metadata?: { confessionId?: string; notes?: string },
-  context?: AuditLogContext,
-): Promise<void> {
-  await this.log( {
-    actionType: AuditActionType.MODERATION_STATE_TRANSITION,
-    metadata: {
-      entityType: 'moderation_log',
-      entityId: moderationLogId,
-      confessionId: metadata?.confessionId,
-      previousState: from,
-      nextState: to,
-      reason,
-      notes: metadata?.notes,
-      transitionedAt: new Date().toISOString(),
-    },
-    context: {
-      ...context,
-      userId: actorId,
-      actor: this.createActor('admin', actorId),
-    },
-  });
-}
+  /**
+   * Log a moderation item's state transition (pending/flagged/escalated/
+   * resolved/hidden/rejected), including actor, previous/next state, and reason.
+   */
+  async logModerationStateTransition(
+    moderationLogId: string,
+    from: string,
+    to: string,
+    actorId: string,
+    reason: string,
+    metadata?: { confessionId?: string; notes?: string },
+    context?: AuditLogContext,
+  ): Promise<void> {
+    await this.log( {
+      actionType: AuditActionType.MODERATION_STATE_TRANSITION,
+      metadata: {
+        entityType: 'moderation_log',
+        entityId: moderationLogId,
+        confessionId: metadata?.confessionId,
+        previousState: from,
+        nextState: to,
+        reason,
+        notes: metadata?.notes,
+        transitionedAt: new Date().toISOString(),
+      },
+      context: {
+        ...context,
+        userId: actorId,
+        actor: this.createActor('admin', actorId),
+      },
+    });
+  }
 
   /**
    * Log comment deletion
@@ -528,13 +564,9 @@ async logModerationStateTransition(
       queue: string;
       operationId?: string;
       targetJobIds?: string[];
-      filters?: Record<string, any>;
-      summary?: {
-        attempted: number;
-        removed: number;
-        failed: number;
-        noOp?: boolean;
-      };
+      removedCount?: number;
+      retainedCount?: number;
+      cutoff?: string;
       reason?: string | null;
       cleanedAt?: string;
     },
@@ -556,224 +588,137 @@ async logModerationStateTransition(
   }
 
   /**
-   * Log an export lifecycle event (request creation, generation, download,
-   * expiry, etc.) without exposing the export token material.
+   * Log an account merge / anonymous identity transfer event.
+   *
+   * This is the central audit entry point for the merge workflow. It captures:
+   * - the actor (user or admin) that initiated the merge,
+   * - the anonymous and authenticated identities involved,
+   * - explicit confirmation evidence,
+   * - conflicts that were surfaced and their resolutions,
+   * - the count of entities transferred per category,
+   * - rollback information when a merge is reversed.
    */
-  async logExportLifecycle(
-    record: ExportLifecycleAuditRecord,
-  ): Promise<void> {
-    const { action, requestId, exportId, actorType, actorId } = record;
+  async logAccountMerge(record: AccountMergeAuditRecord): Promise<void> {
+    const actor =
+      record.context?.actor ||
+      this.createActor('user', record.authenticatedId, {
+        userId: record.authenticatedId,
+        source: 'account_merge',
+      });
+
+    const conflicts = (record.conflicts || []).map((conflict) => ({
+      entityType: conflict.entityType,
+      entityId: conflict.entityId,
+      anonymousId: conflict.anonymousId,
+      authenticatedId: conflict.authenticatedId,
+      resolution: conflict.resolution,
+      details: conflict.details,
+    }));
 
     await this.log({
-      actionType: AuditActionType.EXPORT_LIFECYCLE,
+      actionType: AuditActionType.ACCOUNT_MERGE,
       metadata: {
-        entityType: 'export',
-        entityId: exportId || requestId,
-        exportAction: action,
-        requestId,
-        ...(exportId ? { exportId } : {}),
+        entityType: 'account_merge',
+        entityId: record.mergeId,
+        mergeId: record.mergeId,
+        mergeAction: record.action,
+        anonymousId: record.anonymousId,
+        authenticatedId: record.authenticatedId,
+        authMethod: record.authMethod,
+        confirmedAt: record.confirmedAt,
+        completedAt: record.completedAt,
+        conflictCount: conflicts.length,
+        conflicts: conflicts.length > 0 ? conflicts : undefined,
+        transferred: record.transferred,
+        rollback: record.rollback,
+        reason: record.reason,
         ...(record.metadata || {}),
-        occurredAt: record.occurredAt || new Date().toISOString(),
+        occurredAt: new Date().toISOString(),
       },
       context: {
         ...record.context,
-        actor: this.createActor(actorType, actorId || actorType, {
-          userId: actorId ?? null,
-        }),
+        userId: record.authenticatedId,
+        actor,
       },
+      context: params.context,
     });
   }
 
   /**
-   * Log a password reset lifecycle event without persisting token
-   * material. The caller is responsible for providing an opaque `requestId`
-   * (never the raw token or its hash) and, optionally, a non-reversible
-   * `accountRef` reference.
+   * Log a conflict detected during an account merge attempt.
    */
-  async logPasswordResetLifecycle(
-    record: PasswordResetLifecycleAuditRecord,
+  async logAccountMergeConflict(
+    mergeId: string,
+    conflicts: AccountMergeConflictRecord[],
+    context?: AuditLogContext,
   ): Promise<void> {
-    const { action, requestId, accountRef, actorType, actorId } = record;
-
     await this.log({
-      actionType: AuditActionType.PASSWORD_RESET_LIFECYCLE,
+      actionType: AuditActionType.ACCOUNT_MERGE_CONFLICT,
       metadata: {
-        entityType: 'password_reset_token',
-        entityId: requestId,
-        resetAction: action,
-        requestId,
-        ...(accountRef ? { accountRef } : {}),
-        ...(record.metadata || {}),
-        occurredAt: record.occurredAt || new Date().toISOString(),
+        entityType: 'account_merge',
+        entityId: mergeId,
+        mergeId,
+        conflictCount: conflicts.length,
+        conflicts: conflicts.map((conflict) => ({
+          entityType: conflict.entityType,
+          entityId: conflict.entityId,
+          anonymousId: conflict.anonymousId,
+          authenticatedId: conflict.authenticatedId,
+          resolution: conflict.resolution,
+          details: conflict.details,
+        })),
+        detectedAt: new Date().toISOString(),
       },
-      context: {
-        ...record.context,
-        actor: this.createActor(actorType, actorId || actorType, {
-          userId: actorId ?? null,
-        }),
-      },
+      context,
     });
   }
 
   /**
-   * Convenience wrapper for recording a password reset request. The caller
-   * must supply an opaque `requestId` and must not include the raw token.
+   * Log an unauthorized merge attempt. This is a security-relevant event that
+   * must be retained even when the merge itself is rejected.
    */
-  async logPasswordResetRequested(
-    params: {
-      requestId: string;
-      accountRef?: string | null;
-      expiresAt?: string;
-      invalidatedPriorTokens?: number;
-      context?: AuditLogContext;
-    },
+  async logAccountMergeUnauthorized(
+    mergeId: string,
+    attemptedButUnauthorizedId: string,
+    reason: string,
+    context?: AuditLogContext,
   ): Promise<void> {
-    await this.logPasswordResetLifecycle({
-      action: 'reset_requested',
-      requestId: params.requestId,
-      accountRef: params.accountRef ?? null,
-      actorType: 'user',
-      actorId: null,
+    await this.log({
+      actionType: AuditActionType.ACCOUNT_MERGE_UNAUTHORIZED,
       metadata: {
-        ...(params.expiresAt ? { expiresAt: params.expiresAt } : {}),
-        ...(typeof params.invalidatedPriorTokens === 'number'
-          ? { invalidatedPriorTokens: params.invalidatedPriorTokens }
-          : {}),
+        entityType: 'account_merge',
+        entityId: mergeId,
+        mergeId,
+        attemptedButUnauthorizedId,
+        reason,
+        attemptedAt: new Date().toISOString(),
       },
-      context: params.context,
+      context,
     });
   }
 
   /**
-   * Convenience wrapper for recording the successful consumption of a
-   * password reset token.
+   * Log a rollback of a previously completed account merge.
    */
-  async logPasswordResetConsumed(
-    params: {
-      requestId: string;
-      accountRef?: string | null;
-      consumedAt?: string;
-      context?: AuditLogContext;
-    },
+  async logAccountMergeRollback(
+    mergeId: string,
+    anonymousId: string,
+    authenticatedId: string,
+    rollback: Record<string, unknown>,
+    reason: string,
+    context?: AuditLogContext,
   ): Promise<void> {
-    await this.logPasswordResetLifecycle({
-      action: 'reset_consumed',
-      requestId: params.requestId,
-      accountRef: params.accountRef ?? null,
-      actorType: 'user',
-      actorId: null,
+    await this.log( {
+      actionType: AuditActionType.ACCOUNT_MERGE_ROLLBACK,
       metadata: {
-        ...(params.consumedAt ? { consumedAt: params.consumedAt } : {}),
-      },
-      context: params.context,
-    });
-  }
-
-  /**
-   * Convenience wrapper for recording a failed attempt to consume a
-   * password reset token (expired, already used, or otherwise invalid).
-   * The reason must be a non-sensitive classification.
-   */
-  async logPasswordResetConsumeFailed(
-    params: {
-      requestId: string;
-      accountRef?: string | null;
-      reason:
-        | 'token_expired'
-        | 'token_already_consumed'
-        | 'token_not_found'
-        | 'token_invalidated'
-        | 'token_malformed'
-        | 'unknown';
-      context?: AuditLogContext;
-    },
-  ): Promise<void> {
-    await this.logPasswordResetLifecycle({
-      action: 'reset_consume_failed',
-      requestId: params.requestId,
-      accountRef: params.accountRef ?? null,
-      actorType: 'user',
-      actorId: null,
-      metadata: { failureReason: params.reason },
-      context: params.context,
-    });
-  }
-
-  /**
-   * Convenience wrapper for recording that a password reset token expired
-   * without being consumed.
-   */
-  async logPasswordResetExpired(
-    params: {
-      requestId: string;
-      accountRef?: string | null;
-      expiredAt?: string;
-      context?: AuditLogContext;
-    },
-  ): Promise<void> {
-    await this.logPasswordResetLifecycle({
-      action: 'reset_expired',
-      requestId: params.requestId,
-      accountRef: params.accountRef ?? null,
-      actorType: 'system',
-      actorId: 'system',
-      metadata: {
-        ...(params.expiredAt ? { expiredAt: params.expiredAt } : {}),
-      },
-      context: params.context,
-    });
-  }
-
-  /**
-   * Convenience wrapper for recording that a prior password reset token was
-   * invalidated because a new one was issued.
-   */
-  async logPasswordResetInvalidated(
-    params: {
-      requestId: string;
-      accountRef?: string | null;
-      reason?: 'superseded_by_new_request' | 'admin_revoked' | 'user_revoked';
-      context?: AuditLogContext;
-    },
-  ): Promise<void> {
-    await this.logPasswordResetLifecycle({
-      action: 'reset_invalidated',
-      requestId: params.requestId,
-      accountRef: params.accountRef ?? null,
-      actorType: 'system',
-      actorId: 'system',
-      metadata: {
-        reason: params.reason ?? 'superseded_by_new_request',
-      },
-      context: params.context,
-    });
-  }
-
-  /**
-   * Convenience wrapper for recording that a password reset request was
-   * rate-limited. The `accountRef` should be a non-reversible reference.
-   */
-  async logPasswordResetRateLimited(
-    params: {
-      accountRef?: string | null;
-      limitWindowSeconds?: number;
-      retryAfterSeconds?: number;
-      context?: AuditLogContext;
-    },
-  ): Promise<void> {
-    await this.logPasswordResetLifecycle({
-      action: 'reset_rate_limited',
-      requestId: 'rate-limited',
-      accountRef: params.accountRef ?? null,
-      actorType: 'user',
-      actorId: null,
-      metadata: {
-        ...(typeof params.limitWindowSeconds === 'number'
-          ? { limitWindowSeconds: params.limitWindowSeconds }
-          : {}),
-        ...(typeof params.retryAfterSeconds === 'number'
-          ? { retryAfterSeconds: params.retryAfterSeconds }
-          : {}),
+        entityType: 'account_merge',
+        entityId: mergeId,
+        mergeId,
+        anonymousId: anonymousId,
+        authenticatedId: authenticatedId,
+        rollback,
+        reason,
+        rolledBackAt: new Date().toISOString(),
       },
       context: params.context,
     });

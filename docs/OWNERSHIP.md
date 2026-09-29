@@ -41,6 +41,7 @@ GitHub's automatic reviewer assignment.
 | Anomaly detection | `src/anomaly/` | @yazeed11011 | Medium |
 | Search | `src/search-discovery/` | @yazeed11011 | Low |
 | Feature flags | `src/feature-flags/` | @yazeed11011 | Low |
+| Security headers / CSP | `src/security-headers/`, `src/middleware/security-headers*` | @yazeed11011 | Medium — CSP reports, nonces |
 
 ### 2. Frontend (`xconfess-frontend/`)
 
@@ -53,6 +54,7 @@ GitHub's automatic reviewer assignment.
 | Confession composer | `components/confession/`, `app/confessions/` | @yazeed11011 | High |
 | Traction / metrics | `app/traction/` | @yazeed11011 | Low |
 | PWA / service worker | `public/sw.js`, `public/manifest.webmanifest` | @yazeed11011 | Low |
+| Security headers / CSP | `middleware.ts`, `next.config.*`, `app/api/csp-report/` | @yazeed11011 | Medium — report-only rollout |
 
 ### 3. Soroban Contracts (`xconfess-contracts/`)
 
@@ -77,6 +79,7 @@ GitHub's automatic reviewer assignment.
 | Database schema repair | `scripts/schema-repair.ts` | @yazeed11011 |
 | Seed data | `scripts/seed.ts` | @yazeed11011 |
 | Maintainer triage | `maintainer/` | @yazeed11011 |
+| CSP inventory / report triage | `scripts/csp-inventory.*`, `docs/runbooks/csp-rollout.md` | @yazeed11011 |
 
 ---
 
@@ -92,6 +95,11 @@ GitHub's automatic reviewer assignment.
 4. **Contract upgrade** — follow
    [docs/contract-release-and-upgrade-runbook.md](contract-release-and-upgrade-runbook.md).
    Requires maintainer sign-off before any testnet or mainnet deploy.
+5. **CSP / security header policy change** — coordinate frontend proxy and
+   backend header owners.  Report-only mode must soak clean before enforcement
+   is enabled via configuration.  See
+   [docs/runbooks/csp-rollout.md](runbooks/csp-rollout.md) for the rollout,
+   triage, and rollback procedure.
 
 ---
 
@@ -114,6 +122,17 @@ can help identify inactive areas.
 
 ---
 
+## Security Header Policy Ownership
+
+Security headers (CSP, HSTS, X-Frame-Options, Referrer-Policy, etc.) are
+owned jointly by the frontend proxy (`app/api/`, `middleware.ts`) and the
+backend API (`src/security-headers/`).  Policy changes must be reviewed by
+both owners.  CSP ships in **report-only** mode first; enforcement is toggled
+by configuration only after reports are collected without sensitive URLs and
+violations have been triaged to zero unexplained entries.
+
+---
+
 ## Service Boundaries and Data Flow
 
 ```
@@ -126,6 +145,7 @@ xconfess-frontend (Next.js App Router)
                                                                                │
                                                                                ▼
                                                                xconfess-backend (NestJS)
+                                                                 ├── Security headers / CSP reports
                                                                  ├── Auth / RBAC / session
                                                                  ├── Confession CRUD + encryption
                                                                  ├── Reactions / comments / messages

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { createBrowserRouter, RouterProvider, useLocation } from 'react-router-dom';
 
 /**
@@ -10,7 +10,7 @@ import { createBrowserRouter, RouterProvider, useLocation } from 'react-router-d
  */
 function RouteAnnouncer() {
   const location = useLocation();
-  const [message, setMessage] = useState('');
+  const [], setMessage] = useState('');
   const firstRender = useRef(true);
 
   useEffect(() => {
@@ -88,14 +88,13 @@ function RouteFocusManager() {
   return null;
 }
 
-const router = createBrowserRouter([
+export const router = createBrowserRouter([
   {
-    path: '/',
+    path: '/*',
     element: (
       <>
         <RouteAnnouncer />
         <RouteFocusManager />
-        <RouterProvider router={router} />
       </>
     ),
   },

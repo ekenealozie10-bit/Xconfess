@@ -3,6 +3,9 @@
 This document describes the rules for test fixtures, synthetic data, and how
 the secret scanning CI gate works. See also: [Security Audit Suppressions](SECURITY_AUDIT_SUPPRESSIONS.md).
 
+For structured redaction rules applied to runtime logs, traces, and queue
+payloads, see [Log and Trace Redaction](#log-and-trace-redaction) below.
+
 ## TL;DR
 
 - **Never** use real credentials, tokens, keys, or personally identifiable data
@@ -38,6 +41,84 @@ If you have the [Gitleaks CLI](https://github.com/gitleaks/gitleaks) installed:
 ```bash
 gitleaks detect --source . --config .gitleaks.toml
 ```
+
+---
+
+## Log and Trace Redaction
+
+Sensitive values must never reach log sinks, tracing backends, or queue
+dead-letter payloads. Redaction is enforced at the serializer boundary so that
+structured logs stay queryable while secret-like values are masked.
+
+### Redaction rules
+
+The following domains are redacted by key name (case-insensitive) and by value
+shape. Masking replaces the value with a stable placeholder so log queries and
+aggregations continue to work.
+
+| Domain | Matched keys (case-insensitive) | Masked output |
+|---|---|---|
+| Credentials | `password`, `passwd`, `secret`, `token`, `apiKey`, `api_key`, `authorization`, `cookie`, `set-cookie` | `[REDACTED]` |
+| Email addresses | `email`, `emailAddress`, `recipient`, `to`, `from`, `cc`, `bcc` | `[REDACTED_EMAIL]` |
+| Stellar keys | `stellarSecret`, `stellar_secret`, `serverSecret`, `seed` | `[REDACTED_STELLAR_SECRET]` |
+| JWT / bearer | `jwt`, `bearer`, `accessToken`, `refreshToken`, `idToken` | `[REDACTED_JWT]` |
+| Message metadata | `messageBody`, `message_body`, `content`, `body`, `subject`, `metadata` | `[REDACTED_MESSAGE]` |
+| Payment / PII | `cardNumber`, `cvv`, `ssn`, `phone`, `address` | `[REDACTED_PII]` |
+
+Value-shape rules run in addition to key-name rules:
+
+- Strings matching the JWT shape (`eyJ...`) are replaced with `[REDACTED_JWT]`.
+- Strings matching a Stellar secret seed (56-char base-32 starting with `S`)
+  are replaced with `[REDACTED_STELLAR_SECRET]`.
+- Strings matching `sk-proj-...`, `sk_live_...`, `rk_live_...`, `ghp_...`, or
+  `github_pat_...` are replaced with `[REDACTED]`.
+- Strings matching an email address are replaced with `[REDACTED_EMAIL]`.
+
+### Where redaction is applied
+
+1. **Logger serializers** — the pino/winston serializer redacts the request
+   payload before it is written. Nested objects and arrays are walked
+   recursively; depth is capped to avoid unbounded traversal.
+2. **Exception filters** — HTTP and queue exception filters redact the captured
+   request/response body and headers before attaching them to the error log.
+   Stack traces are preserved; only payload fields are masked.
+3. **Queue payload logging** — job payloads logged on enqueue, retry, and
+   dead-letter are passed through the same serializer. Failed jobs must not
+   leak the original payload into the DLQ log line.
+4. **Tracing attributes** — span attributes are filtered against the same key
+   and value rules before export. Attribute keys are preserved so dashboards
+   and alerts remain queryable.
+
+### Queryability guarantees
+
+- Redaction replaces values, never keys. Log queries such as
+  `level:error AND userId:123` continue to work.
+- Placeholders are stable strings, so counters and rate alerts on
+  `[REDACTED_EMAIL]` remain meaningful.
+- Redaction is idempotent: re-serializing an already-redacted payload does not
+  change the output.
+
+### Regression tests
+
+Each sensitive domain has a regression test that asserts the raw value is
+absent from the serialized output and the placeholder is present:
+
+- `logger.serializer.spec.ts` — credentials, JWT, and Stellar seeds.
+- `exception-filter.spec.ts` — request body, headers, and query strings.
+- `queue-payload-logging.spec.ts` — enqueue, retry, and dead-letter paths.
+- `tracing-attributes.spec.ts` — span attributes and nested metadata.
+
+Tests must cover the failure path (serializer throws, filter receives a
+non-serializable object) and assert that redaction still applies or the field
+is dropped entirely.
+
+### Rollback
+
+Redaction is controlled by `LOG_REDACTION_ENABLED` (default `true`). Setting it
+to `false` disables masking and is intended only for local debugging. Never
+disable redaction in staging or production; the CI gate
+`npm run secret-scan && npm run audit:ci && npm run backend:test` will fail if
+redaction tests are skipped.
 
 ---
 
@@ -114,6 +195,8 @@ The Python-based scanner (`scripts/secret-scanning-preflight.sh`) detects:
 - GitHub Personal Access Tokens (`ghp_...`, `github_pat_...`)
 - Private key PEM blocks (lines starting with `-----BEGIN` followed by `PRIVATE KEY-----`)
 - AWS secret access keys
+- Log/trace payloads containing unredacted values from the domains listed in
+  [Log and Trace Redaction](#log-and-trace-redaction)
 
 The scanner skips:
 - `*.spec.ts`, `*.test.ts` and other test files
@@ -135,3 +218,11 @@ placeholder or an allowlisted testnet contract ID), add a suppression in
 1. `SAFE_PLACEHOLDER_REGEXES` list in `scripts/secret-scanning-preflight.sh`
 2. `[allowlist] > regexes` in `.gitleaks.toml`
 3. Document the suppression in `docs/SECURITY_AUDIT_SUPPRESSIONS.md`
+
+Redaction placeholders (`[REDACTED]`, `[REDACTED_EMAIL]`, `[REDACTED_JWT]`,
+`[REDACTED_STELLAR_SECRET]`, `[REDACTED_MESSAGE]`, `[REDACTED_PII]`) are
+allowlisted by both scanners and must not be added as new suppressions.
+
+If a new sensitive domain is introduced, add its key names and value-shape
+rules to the redaction table above and a matching regression test before
+merging.

@@ -15,7 +15,7 @@
     "dev:frontend": "npm run dev --workspace=xconfess-frontend",
     "backend:build": "npm run build --workspace=xconfess-backend",
     "backend:test": "npm run test --workspace=xconfess-backend",
-    "backend:test:coverage": "npm run test:cov:risk-domains --workspace=xconfess-backend",
+    "backend:test:coverage": "npm run test:cov:r-sk-domains --workspace=xconfess-backend",
     "backend:test:e2e": "npm run test:e2e --workspace=xconfess-backend",
     "backend:lint": "npm run lint --workspace=xconfess-backend",
     "backend:migration:run": "npm run migration:run --workspace=xconfess-backend",
@@ -45,7 +45,6 @@
     "frontend:lint": "npm run lint --workspace=xconfess-frontend",
     "frontend:typecheck": "npm run typecheck --workspace=xconfess-frontend",
     "frontend:budget": "node scripts/check-frontend-budget.js",
-    "contract:fmt:check": "npm run fmt:check --workspace=xconfess-contracts",
     "ci:backend": "npm run backend:build && npm run backend:lint && npm run backend:test",
     "ci:frontend": "npm run frontend:lint && npm run frontend:typecheck && npm run frontend:test && npm run frontend:build && npm run frontend:budget",
     "ci:contract": "npm run contract:fmt:check && npm run contract:lint && npm run contract:test && npm run contract:build:release",
@@ -87,7 +86,12 @@
     "release:check-unreleased": "node scripts/generate-release-notes.js --check-unreleased",
     "post-deploy:verify": "node scripts/post-deploy-verify.js",
     "post-deploy:verify:staging": "node scripts/post-deploy-verify.js --env staging",
-    "post-deploy:verify:production": "node scripts/post-deploy-verify.js --env production"
+    "post-deploy:verify:production": "node scripts/post-deploy-verify.js --env production",
+    "provenance:generate": "node scripts/generate-provenance.js",
+    "provenance:verify": "node scripts/verify-provenance.js",
+    "sbom:generate": "node scripts/generate-sbom.js",
+    "sbom:verify": "node scripts/verify-sbom.js",
+    "sbom:ci": "npm run sbom:generate && npm run provenance:generate && npm run sbom:verify && npm run provenance:verify"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -96,6 +100,7 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.9.1",
+    "@cyclonedx/spdx": "^1.11.0",
     "@playwright/test": "^1.44.0",
     "eslint": "^8.57.0",
     "jest": "^29.7.0"

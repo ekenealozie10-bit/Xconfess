@@ -1,5 +1,6 @@
 import { Transform } from 'class-transformer';
 import {
+  IsBoolean,
   IsEmail,
   IsNotEmpty,
   IsString,
@@ -30,6 +31,15 @@ export class RegisterDto {
 
   @ApiProperty({
     description:
+      'When true, the new e-mail is pending verification and the previous address remains active during the recovery window.',
+    example: false,
+    required: false,
+  })
+  @IsBoolean()
+  pendingEmailVerification?: boolean;
+
+  @ApiProperty({
+    description:
       'Password — min 8, max 72 chars; must include uppercase, lowercase, digit, and special character.',
     example: 'Str0ng!Pass#1',
     minLength: 8,
@@ -49,7 +59,7 @@ export class RegisterDto {
 
   @ApiProperty({
     description:
-      'Display name (3–30 chars, alphanumeric and underscores only).',
+      'Display name (3-30 chars, alphanumeric and underscores only).',
     example: 'alice_42',
     minLength: 3,
     maxLength: 30,
