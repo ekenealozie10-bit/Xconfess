@@ -30,6 +30,8 @@ import { createHash } from 'crypto';
  * ### Encrypted Payloads
  * `encryptedPayload`, `encryptedData`, `encryptedContent`,
  * `rawEncrypted`, `ciphertext`, `encryptedBody`
+ * `sessionId`, `sessionIdentifier`, `sessionRecordId`, `revokedSessionId`,
+ * `priorSessionId`, `newSessionId`, `rotationId`
  *
  * ### Digital Signatures
  * `signature`, `signedMessage`, `digitalSignature`
@@ -59,6 +61,9 @@ import { createHash } from 'crypto';
  * - Timestamps: `*At`, `*.createdAt`, `*.updatedAt`, etc.
  * - `summary`, `before`, `after`, `diff`, `filters`, `outcomes`
  * - `requestId`, `exportId`, `correlationId`
+ * - `sessionCount`, `revokedCount`, `rotationReason`, `revocationReason`
+ * - `revokedAt`, `rotatedAt`, `sessionExpiresAt`, `sessionIssuedAt`
+ * - `sessionState`, `sessionStatus`, `sessionScope`, `sessionVersion`
  * ------------------------------------------------------------
  */
 
@@ -94,6 +99,13 @@ const SENSITIVE_EXACT_FIELDS = new Set([
   'rawEncrypted',
   'ciphertext',
   'encryptedBody',
+  'sessionId',
+  'sessionIdentifier',
+  'sessionRecordId',
+  'revokedSessionId',
+  'priorSessionId',
+  'newSessionId',
+  'rotationId',
   'signature',
   'signedMessage',
   'digitalSignature',
@@ -114,6 +126,8 @@ const SENSITIVE_NAME_PATTERNS: RegExp[] = [
   /apiKey/i,
   /bearer/i,
   /authorization/i,
+  /sessionId/i,
+  /sessionIdentifier/i,
 ];
 
 const JWT_PATTERN = /^[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+$/;
@@ -122,8 +136,10 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const REDACTED_VALUE = '[REDACTED]';
 const REDACTED_EMAIL = '[REDACTED_EMAIL]';
+const REDACTED_SESSION = '[REDACTED_SESSION]';
 const USER_ID_PREFIX = 'user_';
 const USER_ID_HASH_LENGTH = 12;
+const SESSION_ID_HASH_LENGTH = 12;
 
 type RedactableValue =
   | string
@@ -173,6 +189,26 @@ export class AuditLogRedactionService {
     }
 
     return false;
+  }
+
+  /**
+   * Determine if a field name refers to a session identifier.
+   * Session identifiers are treated as sensitive because a leaked
+   * session ID enables token replay against the session store.
+   */
+  isSessionIdentifierField(fieldName: string): boolean {
+    const lower = fieldName.toLowerCase();
+    return (
+      lower === 'sessionid' ||
+      lower === 'sessionidentifier' ||
+      lower === 'sessionrecordid' ||
+      lower === 'revokedsessionid' ||
+      lower === 'priorsessionid' ||
+      lower === 'newsessionid' ||
+      lower === 'rotationid' ||
+      lower.endsWith('sessionid') ||
+      lower.endsWith('_session_id')
+    );
   }
 
   /**
@@ -228,6 +264,10 @@ export class AuditLogRedactionService {
     }
 
     const stringValue = value as string;
+
+    if (this.isSessionIdentifierField(key)) {
+      return this.maskSessionId(stringValue);
+    }
 
     if (this.isSensitiveField(key)) {
       return REDACTED_VALUE;
@@ -292,6 +332,19 @@ export class AuditLogRedactionService {
     }
 
     return `${localPart.substring(0, 2)}***${domain}`;
+  }
+
+  /**
+   * Mask a session identifier using SHA-256 hashing for consistent
+   * anonymous references. Session IDs are never logged in cleartext
+   * because they can be replayed to hijack a live session.
+   */
+  maskSessionId(sessionId: string | number): string {
+    const hash = createHash('sha256')
+      .update(String(sessionId))
+      .digest('hex')
+      .substring(0, SESSION_ID_HASH_LENGTH);
+    return `${REDACTED_SESSION}:${hash}`;
   }
 
   maskJwt(token: string): string {

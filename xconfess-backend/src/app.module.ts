@@ -38,14 +38,14 @@ import { FeatureFlagsModule } from './feature-flags/feature-flags.module';
 import { BookmarkModule } from './bookmark/bookmark.module';
 import { KeyRotationModule } from './key-rotation/key-rotation.module';
 import { AnalyticsModule } from './analytics/analytics.module';
-import { CSRFModule } from './common/csrf/csrf.module';
-import { CSRFMiddleware } from './common/csrf/csrf.middleware';
-//   Canonical queue stack: @nestjs/bullmq (BullMQ v4 + ioredis)
+// ➩ Canonical queue stack: @nestjs/bullmq (BullMQ v4 + ioredis)
 // The legacy @nestjs/bull import has been removed. All queues use BullMQ.
 import { BullModule } from '@nestjs/bullmq';
 import { StructuredLoggingInterceptor } from './common/logging/structured-logging.interceptor';
 import { PerformanceInterceptor } from './common/interceptors/performance.interceptor';
 import { HttpCacheInterceptor } from './common/interceptors/http-cache.interceptor';
+import { RateLimitModule } from './rate-limit/rate-limit.module';
+import { RateLimitGuard } from './rate-limit/rate-limit.guard';
 
 @Module({
   imports: [
@@ -104,7 +104,7 @@ import { HttpCacheInterceptor } from './common/interceptors/http-cache.intercept
           }
         } else {
           new Logger('Bootstrap').warn(
-            'ENABLE_BACKGROUND_JOBS is not "true" — bullMQ workers are disabled. ' +
+            'ENABLE_BACKGROUND_JOBS is not "true" — BullMQ workers are disabled. ' +
               'Queue producers will silently skip enqueue calls. Redis connectivity is not required.',
           );
         }
@@ -133,6 +133,7 @@ import { HttpCacheInterceptor } from './common/interceptors/http-cache.intercept
     }),
     EventEmitterModule.forRoot(),
     ScheduleModule.forRoot(),
+    RateLimitModule,
     HealthModule,
     AnalyticsModule,
     UserModule,
@@ -161,9 +162,12 @@ import { HttpCacheInterceptor } from './common/interceptors/http-cache.intercept
   controllers: [AppController],
   providers: [
     AppService,
+    // Issue: layered, abuse-resistant rate limiting by anonymous identity,
+    // account, IP reputation, route cost, and trusted admin bypasses.
+    // Replaces the IP-only ThrottlerGuard as the global guard.
     {
       provide: APP_GUARD,
-      useClass: ThrottlerGuard,
+      useClass: RateLimitGuard,
     },
     {
       provide: APP_INTERCEPTOR,
