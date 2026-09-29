@@ -328,7 +328,7 @@ export class AuthService {
       })
       .catch((err) =>
         this.logger.warn(
-          `Failed to record login analytics: ${
+          `Failed to record login analytics: ${%rr() {
             err instanceof Error ? err.message : String(err)
           }`,
         ),
@@ -548,5 +548,208 @@ export class AuthService {
         message: 'If the user exists, a password reset email has been sent.',
       };
     }
+  }
+
+  /**
+   * Request an email change. The new address is not active until the
+   * verification challenge is consumed. The response is always generic to
+   * avoid leaking account existence.
+   */
+  async requestEmailChange(
+    userId: number,
+    newEmail: string,
+  ): Promise<{ message: string }> {
+    const genericMessage =
+      'If the account exists, a verification email has been sent to the new address.';
+
+    try {
+      const user = await this.userService.findById(userId);
+      if (!user) {
+        this.logger.warn(`Email change requested for non-existent user`, {
+          maskedUserId: maskUserId(userId),
+        });
+        return { message: genericMessage };
+      }
+
+      // Invalidate any prior outstanding challenges for this user.
+      for (const [challengeId, challenge] of this.emailChangeChallenges) {
+        if (challenge.userId === userId && !challenge.consumedAt) {
+          this.emailChangeChallenges.delete(challengeId);
+        }
+      }
+
+      const newEmailEncrypted = CryptoUtil.encrypt(newEmail);
+      const token = crypto.randomBytes(32).toString('hex');
+      const tokenHash = crypto
+        .createHash('sha256')
+        .update(token)
+        .digest('hex');
+      const challengeId = crypto.randomBytes(16).toString('hex');
+      const expiresAt = new Date(Date.now() + EMAIL_CHANGE_TOKEN_TTL);
+
+      this.emailChangeChallenges.set(challengeId, {
+        id: challengeId,
+        userId,
+        newEmailEncrypted: newEmailEncrypted.ciphertext,
+        newEmailIv: newEmailEncrypted.iv,
+        newEmailTag: newEmailEncrypted.tag,
+        tokenHash,
+        expiresAt,
+        createdAt: new Date(),
+      });
+
+      await this.emailService.sendEmailChangeVerificationEmail(
+        newEmail,
+        token,
+        user.username,
+      );
+
+      this.logger.log(`Email change verification requested`, {
+        maskedUserId: maskUserId(userId),
+        challengeId,
+      });
+
+      return { message: genericMessage };
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'Unknown error';
+      this.logger.error(`Email change request failed: ${errorMessage}`, {
+        maskedUserId: maskUserId(userId),
+        error: errorMessage,
+      });
+      return { message: genericMessage };
+    }
+  }
+
+  /**
+   * Consume an email change verification challenge. Replayed or expired
+   * challenges fail. On success the old address remains recoverable for a
+   * bounded window.
+   */
+  async verifyEmailChange(
+    token: string,
+  ): Promise<{ message: string }> {
+    const tokenHash = crypto
+      .createHash('sha256')
+      .update(token)
+      .digest('hex');
+
+    let matchedChallenge: EmailChangeChallenge | undefined;
+    for (const challenge of this.emailChangeChallenges.values()) {
+      if (challenge.tokenHash === tokenHash) {
+        matchedChallenge = challenge;
+        break;
+      }
+    }
+
+    if (!matchedChallenge) {
+      this.logger.warn(`Email change verification failed: invalid token`);
+      throw new AppException(
+        'Invalid email change token',
+        ErrorCode.AUTH_TOKEN_INVALID,
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    if (matchedChallenge.consumedAt) {
+      this.logger.warn(`Email change verification failed: replayed token`, {
+        maskedUserId: maskUserId(matchedChallenge.userId),
+        challengeId: matchedChallenge.id,
+      });
+      throw new AppException(
+        'Email change token already used',
+        ErrorCode.RESOURCE_GONE,
+        HttpStatus.GONE,
+      );
+    }
+
+    if (matchedChallenge.expiresAt.getTime() <= Date.now()) {
+      this.emailChangeChallenges.delete(matchedChallenge.id);
+      this.logger.warn(`Email change verification failed: expired token`, {
+        maskedUserId: maskUserId(matchedChallenge.userId),
+        challengeId: matchedChallenge.id,
+      });
+      throw new AppException(
+        'Email change token expired',
+        ErrorCode.AUTH_SESSION_EXPIRED,
+        HttpStatus.UNPROCESSABLE_ENTITY,
+      );
+    }
+
+    const user = await this.userService.findById(matchedChallenge.userId);
+    if (!user) {
+      this.emailChangeChallenges.delete(matchedChallenge.id);
+      throw new AppException(
+        'User not found',
+        ErrorCode.NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    // Retain the old address for recovery within the window.
+    this.emailChangeRecoveries.set(user.id, {
+      userId: user.id,
+      previousEmailEncrypted: user.emailEncrypted,
+      previousEmailIv: user.emailIv,
+      previousEmailTag: user.emailTag,
+      changedAt: new Date(),
+      recoveryWindowEndsAt: new Date(
+        Date.now() + EMAIL_CHANGE_RECOVERY_WINDOW_MS,
+      ),
+    });
+
+    await this.userService.updateEmail(
+      user.id,
+      matchedChallenge.newEmailEncrypted,
+      matchedChallenge.newEmailIv,
+      matchedChallenge.newEmailTag,
+    );
+
+    matchedChallenge.consumedAt = new Date();
+
+    this.logger.log(`Email change verified`, {
+      maskedUserId: maskUserId(user.id),
+      challengeId: matchedChallenge.id,
+    });
+
+    return { message: 'Email address has been updated' };
+  }
+
+  /**
+   * Roll back to the previous email address within the recovery window.
+   */
+  async rollbackEmailChange(userId: number): Promise<{ message: string }> {
+    const recovery = this.emailChangeRecoveries.get(userId);
+    if (!recovery) {
+      throw new AppException(
+        'No email change recovery available',
+        ErrorCode.NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    if (recovery.recoveryWindowEndsAt.getTime() <= Date.now()) {
+      this.emailChangeRecoveries.delete(userId);
+      throw new AppException(
+        'Email change recovery window has expired',
+        ErrorCode.RESOURCE_GONE,
+        HttpStatus.GONE,
+      );
+    }
+
+    await this.userService.updateEmail(
+      userId,
+      recovery.previousEmailEncrypted,
+      recovery.previousEmailIv,
+      recovery.previousEmailTag,
+    );
+
+    this.emailChangeRecoveries.delete(userId);
+
+    this.logger.log(`Email change rolled back`, {
+      maskedUserId: maskUserId(userId),
+    });
+
+    return { message: 'Email address has been restored' };
   }
 }

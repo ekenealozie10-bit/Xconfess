@@ -72,10 +72,13 @@ describe('AuthService', () => {
     findById: jest.fn(),
     setResetPasswordToken: jest.fn(),
     updatePassword: jest.fn(),
+    updateEmail: jest.fn(),
   };
 
   const mockEmailService = {
     sendPasswordResetEmail: jest.fn(),
+    sendEmailChangeVerificationEmail: jest.fn(),
+    sendEmailChangeNotificationEmail: jest.fn(),
   };
 
   const mockPasswordResetService = {
@@ -89,11 +92,11 @@ describe('AuthService', () => {
   };
 
   const mockAnonymousUserService = {
-    getOrCreateForUserSession: jest.fn().mockResolvedValue({ id: 'anon-1' }),
+    getOrCreateForUserSession: jest.fn().mockResolved({ id: 'anon-1' }),
   };
 
   const mockLockoutService = {
-    getStatus: jest.fn().mockResolvedValue({
+    getStatus: jest.fn().mockResolved({
       isLocked: false,
       attemptsRemaining: 5,
       lockCount: 0,

@@ -1,5 +1,6 @@
 import { Transform } from 'class-transformer';
 import {
+  IsBoolean,
   IsEmail,
   IsNotEmpty,
   IsString,
@@ -27,6 +28,15 @@ export class RegisterDto {
   @IsEmail({}, { message: 'email must be a valid e-mail address' })
   @IsNotEmpty({ message: 'email must not be empty' })
   email!: string;
+
+  @ApiProperty({
+    description:
+      'When true, the new e-mail is pending verification and the previous address remains active during the recovery window.',
+    example: false,
+    required: false,
+  })
+  @IsBoolean()
+  pendingEmailVerification?: boolean;
 
   @ApiProperty({
     description:
