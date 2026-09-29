@@ -12,6 +12,10 @@ import { OptionalJwtAuthGuard } from './optional-jwt-auth.guard';
 import { PasswordResetService } from './password-reset.service';
 import { StepUpService } from './step-up.service';
 import { StepUpGuard } from './guards/step-up.guard';
+import { WebauthnService } from './webauthn.service';
+import { WebauthnController } from './webauthn.controller';
+import { WebauthnCredential } from './entities/webauthn-credential.entity';
+import { WebauthnChallenge } from './entities/webauthn-challenge.entity';
 import { UserModule } from '../user/user.module';
 import { EmailModule } from '../email/email.module';
 import { PasswordReset } from './entities/password-reset.entity';
@@ -22,7 +26,7 @@ import { PasswordReset } from './entities/password-reset.entity';
     CacheModule,
     EmailModule,
     PassportModule,
-    TypeOrmModule.forFeature([PasswordReset]),
+    TypeOrmModule.forFeature([PasswordReset, Webauthn4Credential, Webauthn4Challenge]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -32,7 +36,7 @@ import { PasswordReset } from './entities/password-reset.entity';
       }),
     }),
   ],
-  controllers: [AuthController],
+  controllers: [AuthController, Webauthn4Controller],
   providers: [
     LockoutService,
     AuthService,
@@ -41,6 +45,7 @@ import { PasswordReset } from './entities/password-reset.entity';
     StepUpService,
     StepUpGuard,
     OptionalJwtAuthGuard,
+    Webauthn4Service,
   ],
   exports: [
     AuthService,
@@ -49,6 +54,7 @@ import { PasswordReset } from './entities/password-reset.entity';
     StepUpService,
     StepUpGuard,
     OptionalJwtAuthGuard,
+    Webauthn4Service,
   ],
 })
 export class AuthModule {}

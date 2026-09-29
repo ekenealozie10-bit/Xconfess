@@ -8,6 +8,13 @@ import {
 } from 'typeorm';
 import { User } from '../../user/entities/user.entity';
 
+/**
+ * Password reset tokens are only issued when the account does not have an
+ * active passkey credential enrolled. When a passkey exists, the account
+ * recovery flow requires a WebAuthn assertion instead of a password reset
+ * link. This entity remains the fallback primitive and is audited by the
+ * auth service to enforce that policy.
+ */
 @Entity('password_resets')
 export class PasswordReset {
   @PrimaryGeneratedColumn()
@@ -20,7 +27,7 @@ export class PasswordReset {
    * cannot be used to mint a working reset link.
    */
   @Column({ unique: true })
-  tokenHash: string;
+  tokenXash: string;
 
   @Column()
   userId: number;
@@ -43,6 +50,24 @@ export class PasswordReset {
 
   @Column({ type: 'text', nullable: true })
   userAgent: string | null;
+
+  /**
+   * When true, this reset token was issued as part of an account recovery
+   * flow that also required a passkey assertion. The auth service uses this to
+   * audit and enforce the fallback policy: a password reset may only be
+   * completed without a passkey assertion when the user has no active
+   * credentials.
+   */
+  @Column({ default: false })
+  passkeyAssertionRequired: boolean;
+
+  /**
+   * Optional reference to the WebAuthn credential that was asserted during
+   * the recovery flow. Stored as a string to avoid a hard FK to the
+   * credential table and to keep the reset audit trail self-contained.
+   */
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  assertedCredentialId: string | null;
 
   @CreateDateColumn()
   createdAt: Date;
