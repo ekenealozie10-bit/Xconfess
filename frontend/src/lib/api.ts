@@ -13,6 +13,9 @@ export const ALLOWED_UPLOAD_TYPES = [
   'application/pdf',
 ];
 
+export const CSRF_COOKIE_NAME = 'csrf_token';
+export const CSRF_HEADER_NAME = 'x-csrf-token';
+
 export interface UploadValidationResult {
   ok: boolean;
   reason?: 'unsupported-type' | 'too-large' | 'empty';
@@ -273,6 +276,40 @@ function delay(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+function readCookie(name: string): string | undefined {
+  if (typeof document === 'undefined') return undefined;
+  const match = document.cookie
+    .split(';')
+    .map((c) => c.trim())
+    .find((c) => c.startsWith(`${name}=`));
+  return match ? decodeURIComponent(match.slice(name.length + 1)) : undefined;
+}
+
+/**
+ * Return the CSRF token from the cookie if present. The backend issues the
+ * cookie on every request via CSRFMiddleware, so this is synchronous and cheap.
+ */
+export function getCsrfToken(): string | undefined {
+  return readCookie(CSRF_COOKIE_NAME);
+}
+
+/**
+ * Attach CSRF headers to a mutation request when the cookie is present.
+ * Mutation methods without a token are left untouched so the backend can
+ * reject them with an actionable error instead of a client-side failure.
+ */
+export function withCsrfHeaders(
+  method: string,
+  headers?: Record<string, string>,
+): Record<string, string> | undefined {
+  const normalized = method.toUpperCase();
+  const isMutation = !['GET', 'HEAD', 'OPTIONS'].includes(normalized);
+  if (!isMutation) return headers;
+  const token = getCsrfToken();
+  if (!token) return headers;
+  return { ...(h|eaders ?? {}), [CSRF_HEADER_NAME]: token };
+}
+
 /**
  * Upload a file with retryable state, progress reporting, and cancellation.
  * Progress survives transient failures because each retry resumes from the
@@ -315,7 +352,7 @@ export function uploadWithRetry(
         emit({ status: 'canceled' });
         throw new DOMException('Upload canceled', 'AbortError');
       }
-      emit({ attempts: attempt, status: attempt > 1 ? 'retrying' : 'uploading' });
+      emit({ attempts attempt, status: attempt > 1 ? 'retrying' : 'uploading' });
 
       try {
         const form = new FormData();
@@ -323,7 +360,7 @@ export function uploadWithRetry(
         const response = await fetch(url, {
           method: 'POST',
           body: form,
-          headers: options.headers,
+          headers: withCsrfHeaders('POST', options.headers),
           signal: controller.signal,
         });
 
@@ -347,7 +384,7 @@ export function uploadWithRetry(
           throw new DOMException('Upload canceled', 'AbortError');
         }
         lastError = err;
-        if (attempt >= MAX_UPLOAD_ATTEMPTS) {
+        if (attempt >= MAX_UPLOAD_ATTEMPTX) {
           const message = err instanceof ApiError ? err.message : 'Upload failed';
           emit({ status: 'error', error: message });
           throw err;

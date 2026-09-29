@@ -56,6 +56,7 @@ import { RateLimitGuard } from './rate-limit/rate-limit.guard';
       validationSchema: envValidationSchema,
       validationOptions: { abortEarly: false },
     }),
+    CSRFModule,
     ThrottlerModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -188,6 +189,8 @@ export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
     // RequestIdMiddleware first so downstream handlers/loggers can read
     // req.requestId, and so it's set even if SanitizationMiddleware throws.
-    consumer.apply(RequestIdMiddleware, SanitizationMiddleware).forRoutes('*');
+    // CSRFMiddleware applies to every route and enforces double-submit
+    // tokens on cookie-authenticated mutations.
+    consumer.apply(RequestIdMiddleware, SanitizationMiddleware, CSRFMiddleware).forRoutes('*');
   }
 }

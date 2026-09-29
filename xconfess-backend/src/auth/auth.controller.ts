@@ -11,6 +11,7 @@ import {
   UseGuards,
   UnauthorizedException,
   HttpException,
+  Res,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import {

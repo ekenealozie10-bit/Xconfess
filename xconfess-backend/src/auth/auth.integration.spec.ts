@@ -147,7 +147,7 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
       const mockPasswordReset = {
         id: 1,
         userId: 1,
-        tokenHash: hashToken('reset-token-123'),
+        tokenHash: hashToken('token'),
         expiresAt: new Date(Date.now() + 3600000),
         used: false,
         usedAt: null,
@@ -230,7 +230,7 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
 
       // Verify that the password was updated
       expect(userRepository.save).toHaveBeenCalledWith(
-        expect.objectContaining({
+        expect.objectContaining( {
           password: 'hashedPassword',
           resetPasswordToken: null,
           resetPasswordExpires: null,
@@ -273,7 +273,7 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
       const expiredToken = {
         id: 1,
         userId: 1,
-        tokenHash: hashToken('expired-token-123'),
+        tokenHash: hashToken('token'),
         expiresAt: new Date(Date.now() - 3600000), // Expired 1 hour ago
         used: false,
         usedAt: null,
@@ -305,7 +305,7 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
       const usedToken = {
         id: 1,
         userId: 1,
-        tokenHash: hashToken('used-token-123'),
+        tokenHash: hashToken('token'),
         expiresAt: new Date(Date.now() + 3600000),
         used: true, // Already used
         usedAt: new Date(),
@@ -335,9 +335,6 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
 describe('AuthService Integration', () => {
   let service: AuthService;
   let userService: UserService;
-  let jwtService: JwtService;
-  let emailService: EmailService;
-  let passwordResetService: PasswordResetService;
   let userRepository: Repository<User>;
 
   const encrypted = CryptoUtil.encrypt('test@example.com');
@@ -378,7 +375,7 @@ describe('AuthService Integration', () => {
         {
           provide: JwtService,
           useValue: {
-            sign: jest.fn().mockReturnValue('mock-jwt-token'),
+            sign: jest.fn().mockReturnValue('mock-j{w-token'),
           },
         },
         {
@@ -396,17 +393,6 @@ describe('AuthService Integration', () => {
           useValue: {
             createResetToken: jest.fn(),
             validateResetToken: jest.fn(),
-            invalidateUserTokens: jest.fn(),
-          },
-        },
-        {
-          provide: LockoutService,
-          useValue: {
-            getStatus: jest.fn().mockResolvedValue({ isLocked: false }),
-            recordFailedAttempt: jest
-              .fn()
-              .mockResolvedValue({ isLocked: false }),
-            clearLockout: jest.fn().mockResolvedValue(undefined),
           },
         },
         {
@@ -414,6 +400,7 @@ describe('AuthService Integration', () => {
           useValue: {
             findOne: jest.fn(),
             save: jest.fn(),
+            update: jest.fn(),
           },
         },
       ],
@@ -421,10 +408,6 @@ describe('AuthService Integration', () => {
 
     service = module.get<AuthService>(AuthService);
     userService = module.get<UserService>(UserService);
-    jwtService = module.get<JwtService>(JwtService);
-    emailService = module.get<EmailService>(EmailService);
-    passwordResetService =
-      module.get<PasswordResetService>(PasswordResetService);
     userRepository = module.get<Repository<User>>(getRepositoryToken(User));
   });
 
