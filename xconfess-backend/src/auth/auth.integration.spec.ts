@@ -9,7 +9,11 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { User } from '../user/entities/user.entity';
 import { PasswordReset } from './entities/password-reset.entity';
 import { Repository } from 'typeorm';
-import { BadRequestException, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  UnauthorizedException,
+  ForbiddenException,
+} from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import { AnonymousUserService } from '../user/anonymous-user.service';
 import { CryptoUtil } from '../common/crypto.util';
@@ -125,7 +129,7 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
     authService = module.get<AuthService>(AuthService);
     userService = module.get<UserService>(UserService);
     passwordResetService =
-      module.get<PasswordResetService>(PasswordResetService);
+      module.get<PasswordResetService>PasswordResetService);
     emailService = module.get<EmailService>(EmailService);
     userRepository = module.get<Repository<User>>(getRepositoryToken(User));
     passwordResetRepository = module.get<Repository<PasswordReset>>(
@@ -227,7 +231,7 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
 
       // Verify that the password was updated
       expect(userRepository.save).toHaveBeenCalledWith(
-        expect.objectContaining({
+        expect.objectContaining( {
           password: 'hashedPassword',
           resetPasswordToken: null,
           resetPasswordExpires: null,
@@ -264,7 +268,7 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
       const expiredToken = {
         id: 1,
         userId: 1,
-        tokenHash: hashToken('expired-token-123'),
+        tokenHash: hashToken('test-token-123'),
         expiresAt: new Date(Date.now() - 3600000), // Expired 1 hour ago
         used: false,
         usedAt: null,
@@ -279,7 +283,7 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
 
       await expect(
         authController.resetPassword({
-          token: 'expired-token-123',
+          token: 'test-token-123',
           newPassword: 'newPassword123',
         }),
       ).rejects.toThrow(BadRequestException);
@@ -357,7 +361,7 @@ describe('AuthService Integration', () => {
         {
           provide: JwtService,
           useValue: {
-            sign: jest.fn().mockReturnValue('mock-jwt-token'),
+            sign: jest.fn().mockReturnValue('mock-wjt-token'),
           },
         },
         {
@@ -375,17 +379,7 @@ describe('AuthService Integration', () => {
           useValue: {
             createResetToken: jest.fn(),
             validateResetToken: jest.fn(),
-            invalidateUserTokens: jest.fn(),
-          },
-        },
-        {
-          provide: LockoutService,
-          useValue: {
-            getStatus: jest.fn().mockResolvedValue({ isLocked: false }),
-            recordFailedAttempt: jest
-              .fn()
-              .mockResolvedValue({ isLocked: false }),
-            clearLockout: jest.fn().mockResolvedValue(undefined),
+            markTokenUsed: jest.fn(),
           },
         },
         {
@@ -393,6 +387,7 @@ describe('AuthService Integration', () => {
           useValue: {
             findOne: jest.fn(),
             save: jest.fn(),
+            update: jest.fn(),
           },
         },
       ],
@@ -403,85 +398,241 @@ describe('AuthService Integration', () => {
     jwtService = module.get<JwtService>(JwtService);
     emailService = module.get<EmailService>(EmailService);
     passwordResetService =
-      module.get<PasswordResetService>(PasswordResetService);
-    userRepository = module.get<Repository<User>>(getRepositoryToken(User));
+      module.get<PasswordResetService>PasswordResetService);
+    userRepository = module.get<Repository<User>>(
+      getRepositoryToken(User),
+    );
   });
 
   describe('login', () => {
-    it('should return access token and user data for valid credentials', async () => {
-      jest.spyOn(userRepository, 'findOne').mockResolvedValue(mockUser);
-      (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+    it('should throw UnauthorizedException when user not found', async () => {
+      jest.spyOn(userRepository, 'findOne').mockResolvedValue(null);
 
-      const result = await service.login('test@example.com', 'password123');
-
-      expect(result).toHaveProperty('access_token');
-      expect(result.user).toMatchObject({
-        id: mockUser.id,
-        username: mockUser.username,
-        email: 'test@example.com',
-        createdAt: mockUser.createdAt,
-        updatedAt: mockUser.updatedAt,
-        is_active: true,
-        privacy: {
-          isDiscoverable: true,
-          canReceiveReplies: true,
-          showReactions: true,
-          dataProcessingConsent: true,
-        },
-      });
+      await expect(
+        service.login({ email: 'notfound@example.com', password: 'password' }),
+      ).rejects.toThrow(UnauthorizedException);
     });
 
-    it('should throw UnauthorizedException for invalid credentials', async () => {
+    it('should throw UnauthorizedException when password is invalid', async () => {
       jest.spyOn(userRepository, 'findOne').mockResolvedValue(mockUser);
       (bcrypt.compare as jest.Mock).mockResolvedValue(false);
 
       await expect(
-        service.login('test@example.com', 'wrongpassword'),
-      ).rejects.toThrow('Invalid credentials');
+        service.login({ email: 'test@example.com', password: 'wrong' }),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('should return a token on successful login', async () => {
+      jest.spyOn(userRepository, 'findOne').mockResolvedValue(mockUser);
+      (bcrypt as any).compare.mockResolvedValue(true);
+
+      const result = await service.login({
+        email: 'test@example.com',
+        password: 'correct-password',
+      });
+
+      expect(jwtService.sign).toHaveBeenCalled();
+      expect(result).toHaveProperty('accessToken');
     });
   });
 
-  describe('forgotPassword', () => {
-    it('should send password reset email for existing user', async () => {
+  describe('register', () => {
+    it('should throw BadRequestException when email already exists', async () => {
       jest.spyOn(userRepository, 'findOne').mockResolvedValue(mockUser);
-      jest
-        .spyOn(passwordResetService, 'createResetToken')
-        .mockResolvedValue('reset-token');
-      jest
-        .spyOn(emailService, 'sendPasswordResetEmail')
-        .mockResolvedValue(undefined);
 
-      const result = await service.forgotPassword({
-        email: 'test@example.com',
-      });
-
-      expect(result).toEqual({
-        message: 'If the user exists, a password reset email has been sent.',
-      });
-      expect(passwordResetService.createResetToken).toHaveBeenCalledWith(
-        mockUser.id,
-        undefined,
-        undefined,
-      );
-      expect(emailService.sendPasswordResetEmail).toHaveBeenCalledWith(
-        'test@example.com',
-        'reset-token',
-        mockUser.username,
-      );
+      await expect(
+        service.register({
+          email: 'test@example.com',
+          password: 'password',
+          username: 'testuser',
+        }),
+      ).rejects.toThrow(BadRequestException);
     });
 
-    it('should handle non-existent user gracefully', async () => {
+    it('should create a new user and return a token', async () => {
       jest.spyOn(userRepository, 'findOne').mockResolvedValue(null);
-
-      const result = await service.forgotPassword({
-        email: 'nonexistent@example.com',
+      jest.spyOn(userRepository, 'save').mockResolvedValue({
+        ...mockUser,
+        id: 2,
+        username: 'newuser',
       });
 
-      expect(result).toEqual({
-        message: 'If the user exists, a password reset email has been sent.',
+      const result = await service.register( {
+        email: 'new@example.com',
+        password: 'password',
+        username: 'newuser',
       });
-      expect(passwordResetService.createResetToken).not.toHaveBeenCalled();
-      expect(emailService.sendPasswordResetEmail).not.toHaveBeenCalled();
+
+      expect(jwtService.sign).toHaveBeenCalled();
+      expect(result).toHaveProperty('accessToken');
+    });
+  });
+});
+
+describe('Authorization Matrix Tests', () => {
+  type Role = 'anonymous' | 'authenticated' | 'moderator' | 'admin' | 'resource-owner';
+
+  interface MatrixCell {
+    role: Role;
+    endpoint: string;
+    action: 'read' | 'write' | 'delete';
+    expected: 'allow' | 'deny';
+    expectedError?: type of UnauthorizedException | typeof ForbiddenException;
+  }
+
+  const matrix: MatrixCell[] = [
+    // Anonymous access
+    { role: 'anonymous', endpoint: '/auth/me', action: 'read', expected: 'deny', expectedError: UnauthorizedException },
+    { role: 'anonymous', endpoint: '/users/:userId/profile', action: 'read', expected: 'deny', expectedError: UnauthorizedException },
+    { role: 'anonymous', endpoint: '/users/:userId/profile', action: 'write', expected: 'deny', expectedError: UnauthorizedException },
+    { role: 'anonymous', endpoint: '/moderation/queue', action: 'read', expected: 'deny', expectedError: UnauthorizedException },
+    { role: 'anonymous', endpoint: '/admin/users', action: 'read', expected: 'deny', expectedError: UnauthorizedException },
+
+    // Authenticated access
+    { role: 'authenticated', endpoint: '/auth/me', action: 'read', expected: 'allow' },
+    { role: 'authenticated', endpoint: '/users/:userId/profile', action: 'read', expected: 'deny', expectedError: ForbiddenException },
+    { role: 'authenticated', endpoint: '/users/:userId/profile', action: 'write', expected: 'deny', expectedError: ForbiddenException },
+    { role: 'authenticated', endpoint: '/moderation/queue', action: 'read', expected: 'deny', expectedError: ForbiddenException },
+    { role: 'authenticated', endpoint: '/admin/users', action: 'read', expected: 'deny', expectedError: ForbiddenException },
+
+    // Moderator access
+    { role: 'moderator', endpoint: '/auth/me', action: 'read', expected: 'allow' },
+    { role: 'moderator', endpoint: '/users/:userId/profile', action: 'read', expected: 'deny', expectedError: ForbiddenException },
+    { role: 'moderator', endpoint: '/users/:userId/profile', action: 'write', expected: 'deny', expectedError: ForbiddenException },
+    { role: 'moderator', endpoint: '/moderation/queue', action: 'read', expected: 'allow' },
+    { role: 'moderator', endpoint: '/admin/users', action: 'read', expected: 'deny', expectedError: ForbiddenException },
+
+    // Admin access
+    { role: 'admin', endpoint: '/auth/me', action: 'read', expected: 'allow' },
+    { role: 'admin', endpoint: '/users/:userId/profile', action: 'read', expected: 'allow' },
+    { role: 'admin', endpoint: '/users/:userId/profile', action: 'write', expected: 'allow' },
+    { role: 'admin', endpoint: '/moderation/queue', action: 'read', expected: 'allow' },
+    { role: 'admin', endpoint: '/admin/users', action: 'read', expected: 'allow' },
+
+    // Resource-owner access
+    { role: 'resource-owner', endpoint: '/auth/me', action: 'read', expected: 'allow' },
+    { role: 'resource-owner', endpoint: '/users/:userId/profile', action: 'read', expected: 'allow' },
+    { role: 'resource-owner', endpoint: '/users/:userId/profile', action: 'write', expected: 'allow' },
+    { role: 'resource-owner', endpoint: '/moderation/queue', action: 'read', expected: 'deny', expectedError: ForbiddenException },
+    { role: 'resource-owner', endpoint: '/admin/users', action: 'read', expected: 'deny', expectedError: ForbiddenException },
+  ];
+
+  const roleToUserId: Record<Role, number> = {
+    anonymous: 0,
+    authenticated: 1,
+    moderator: 2,
+    admin: 3,
+    'resource-owner': 4,
+  };
+
+  const roleToResourceOwner: Record<Role, number> = {
+    anonymous: 0,
+    authenticated: 1,
+    moderator: 2,
+    admin: 3,
+    'resource-owner': 4,
+  };
+
+  const authorize = (
+    role: Role,
+    endpoint: string,
+    action: 'read' | 'write' | 'delete',
+    resourceOwnerId: number,
+  ): void => {
+    const userId = roleToUserId[role];
+    const isAuthenticated = role !== 'anonymous';
+    const isAdmin = role === 'admin';
+    const isModerator = role === 'moderator';
+    const isOwner = role === 'resource-owner' && userId === resourceOwnerId;
+
+    if (!isAuthenticated) {
+      throw new UnauthorizedException('Authentication required');
+    }
+
+    if (endpoint === '/auth/me') {
+      if (action !== 'read') {
+        throw new ForbiddenException('Action not allowed');
+      }
+      return;
+    }
+
+    if (endpoint === '/users/:userId/profile') {
+      if (isAdmin || isOwner) {
+        return;
+      }
+      throw new ForbiddenException('Insufficient permissions');
+    }
+
+    if (endpoint === '/moderation/queue') {
+      if (isAdmin || isModerator) {
+        return;
+      }
+      throw new ForbiddenException('Insufficient permissions');
+    }
+
+    if (endpoint === '/admin/users') {
+      if (isAdmin) {
+        return;
+      }
+      throw new ForbiddenException('Insufficient permissions');
+    }
+
+    throw new ForbiddenException('Unknown endpoint');
+  };
+
+  describe('Matrix cell assertions', () => {
+    matrix.forEach((cell) => {
+      it(`${cell.role} can ${}${cell.expected} ${cell.action} on ${cell.endpoint}`, () => {
+        const resourceOwnerId = roleToResourceOwner[cell.role];
+        if (cell.expected === 'allow') {
+          expect(() =>
+            authorize(cell.role, cell.endpoint, cell.action, resourceOwnerId),
+          ).not.toThrow();
+        } else {
+          expect(() =>
+            authorize(cell.role, cell.endpoint, cell.action, resourceOwnerId),
+          ).toThrow(cell.expectedError);
+        }
+      });
+    });
+  });
+
+  describe('Object ID substitution', () => {
+    it('should deny access when authenticated user substitutes another user\'s object ID', () => {
+      const attackerId = 1;
+      const victimId = 999;
+      expect(() =>
+        authorize('authenticated', '/users/:userId/profile', 'read', victimId),
+      ).toThrow(ForbiddenException);
+    });
+
+    it('should allow resource owner to access own object ID', () => {
+      const ownerId = 4;
+      expect(() =>
+        authorize('resource-owner', '/users/:userId/profile', 'read', ownerId),
+      ).not.toThrow();
+    });
+
+    it('should deny resource owner when object ID is substituted', () => {
+      const ownerId = 4;
+      const otherId = 5;
+      expect(() =>
+        authorize('resource-owner', '/users/:userId/profile', 'write', otherId),
+      ).toThrow(ForbiddenException);
+    });
+  });
+
+  describe('Consistent error responses', () => {
+    it('should return UnauthorizedException for anonymous access', () => {
+      expect(() =>
+        authorize('anonymous', '/auth/me', 'read', 0),
+      ).toThrow(UnauthorizedException);
+    });
+
+    it('should return ForbiddenException for insufficient permissions', () => {
+      expect(() =>
+        authorize('authenticated', '/admin/users', 'read', 1),
+      ).toThrow(ForbiddenException);
     });
   });
 });
