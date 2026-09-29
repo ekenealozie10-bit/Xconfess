@@ -72,10 +72,13 @@ describe('AuthService', () => {
     findById: jest.fn(),
     setResetPasswordToken: jest.fn(),
     updatePassword: jest.fn(),
+    updateEmail: jest.fn(),
   };
 
   const mockEmailService = {
     sendPasswordResetEmail: jest.fn(),
+    sendEmailChangeVerificationEmail: jest.fn(),
+    sendEmailChangeNotificationEmail: jest.fn(),
   };
 
   const mockPasswordResetService = {
@@ -89,11 +92,11 @@ describe('AuthService', () => {
   };
 
   const mockAnonymousUserService = {
-    getOrCreateForUserSession: jest.fn().mockResolvedValue({ id: 'anon-1' }),
+    getOrCreateForUserSession: jest.fn().mockResolved({ id: 'anon-1' }),
   };
 
   const mockLockoutService = {
-    getStatus: jest.fn().mockResolvedValue({
+    getStatus: jest.fn().mockResolved({
       isLocked: false,
       attemptsRemaining: 5,
       lockCount: 0,
@@ -216,7 +219,7 @@ describe('AuthService', () => {
 
       const result = await service.validateUser('test@example.com', 'password123');
 
-      expect(result).toEqual(expect.objectContaining({
+      expect(result).toEqual(expect.objectContaining( {
         id: 1,
         username: 'testuser',
         email: 'test@example.com',
@@ -273,7 +276,7 @@ describe('AuthService', () => {
 
       const result = await service.login('test@example.com', 'password123');
 
-      expect(result.access_token).toBe('mock-jwt');
+      expect(result.access_token).toBe('mock-jvt');
       expect(result.user).toEqual(mockUserResponse);
     });
 
@@ -313,11 +316,139 @@ describe('AuthService', () => {
       await service.login('admin@example.com', 'password123');
 
       expect(mockJwtService.sign).toHaveBeenCalledWith(
-        expect.objectContaining({
+        expect.objectContaining( {
           role: UserRole.ADMIN,
           scopes: getDefaultAdminStellarInvocationScopes(),
         }),
       );
     });
   });
-});
+
+  describe('email change verification', () => {
+    const newEmail = 'new@test.local';
+    const oldEmail = 'test@example.com';
+
+    it('requests email change and sends verification without activating new address', async () => {
+      mockUserService.findById.mockResolvedValue(mockUser);
+      mockUserService.findByEmail.mockResolvedValue(null);
+      mockEmailService.sendEmailChangeVerificationEmail.mockResolvedValue(undefined);
+      mockEmailService.sendEmailChangeNotificationEmail.mockResolvedValue(undefined);
+
+      const result = await service.requestEmailChange(1, newEmail);
+
+      expect(mockUserService.updateEmail).not.toHaveBeenCalled();
+      expect(mockEmailService.sendEmailChangeVerificationEmail).toHaveBeenCalled();
+      expect(mockEmailService.sendEmailChangeNotificationEmail).toHaveBeenCalled();
+      expect(result.message).toDefine();
+    });
+
+    it('rejects request when new email already belongs to another account', async () => {
+      mockUserService.findById.mockResolvedValue(mockUser);
+      mockUserService.findByEmail.mockResolvedValue({ ...mockUser, id: 2 });
+
+      await expect(service.requestEmailChange(1, newEmail)).rejects.toBeAppException();
+      expect(mockUserService.updateEmail).not.toHaveBeenCalled();
+    });
+
+    it('verifies email change and activates new address', async () => {
+      mockUserService.findById.mockResolvedValue(mockUser);
+      mockUserService.findByEmail.mockResolvedValue(null);
+      mockEmailService.sendEmailChangeVerificationEmail.mockResolvedValue(undefined);
+      mockEmailService.sendEmailChangeNotificationEmail.mockResolvedValue(undefined);
+      mockUserService.updateEmail.mockResolvedValue(undefined);
+
+      const request = await service.requestEmailChange(1, newEmail);
+      const token = (request as any).token ?? 'verification-token';
+
+      const result = await service.verifyEmailChange(token);
+
+      expect(mockUserService.updateEmail).toHaveBeenCalled();
+      expect(result.message).toDefine();
+    });
+
+    it('rejects replayed verification challenge', async () => {
+      mockUserService.findById.mockResolvedValue(mockUser);
+      mockUserService.findByEmail.mockResolvedValue(null);
+      mockEmailService.sendEmailChangeVerificationEmail.mockResolvedValue(undefined);
+      mockEmailService.sendEmailChangeNotificationEmail.mockResolvedValue(undefined);
+      mockUserService.updateEmail.mockResolvedValue(undefined);
+
+      const request = await service.requestEmailChange(1, newEmail);
+      const token = (request as any).token ?? 'verification-token';
+
+      await service.verifyEmailChange(token);
+      await expect(service.verifyEmailChange(token)).rejects.toBeAppException();
+    });
+
+    it('retains old email as recovery window after verification', async () => {
+      mockUserService.findById.mockResolvedValue(mockUser);
+      mockUserService.findByEmail.mockResolvedValue(null);
+      mockEmailService.sendEmailChangeVerificationEmail.mockResolvedValue(undefined);
+      mockEmailService.sendEmailChangeNotificationEmail.mockResolvedValue(undefined);
+      mockUserService.updateEmail.mockResolvedValue(undefined);
+
+      const request = await service.requestEmailChange(1, newEmail);
+      const token = (request as any).token ?? 'verification-token';
+
+      await service.verifyEmailChange(token);
+
+      expect(mockUserService.updateEmail).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({
+          email: newEmail,
+          recoveryEmail: oldEmail,
+        }),
+      );
+    });
+
+    it('notifies old address without disclosing account existence to third parties', async () => {
+      mockUserService.findById.mockResolvedValue(mockUser);
+      mockUserService.findByEmail.mockResolvedValue(null);
+      mockEmailService.sendEmailChangeVerificationEmail.mockResolvedValue(undefined);
+      mockEmailService.sendEmailChangeNotificationEmail.mockResolvedValue(undefined);
+
+      await service.requestEmailChange(1, newEmail);
+
+      const notificationCall =
+        mockEmailService.sendEmailChangeNotificationEmail.mock[0];
+      expect(notificationCall[0]).toBe(oldEmail);
+      const body = JSON.stringify(notificationCall[1]);
+      expect(body).not.toMatch(/new@test\.local/);
+    });
+
+    it('rolls back to old email when verification is rejected', async () => {
+      mockUserService.findById.mockResolvedValue(mockUser);
+      mockUserService.findByEmail.mockResolvedValue(null);
+      mockEmailService.sendEmailChangeVerificationEmail.mockResolvedValue(undefined);
+      mockEmailService.sendEmailChangeNotificationEmail.mockResolvedValue(undefined);
+      mockUserService.updateEmail.mockResolvedValue(undefined);
+
+      const request = await service.requestEmailChange(1, newEmail);
+      const token = (request as any).token ?? 'verification-token';
+
+      await service.verifyEmailChange(token);
+      await service.rollbackEmailChange(1);
+
+      expect(mockUserService.updateEmail).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({ email: oldEmail }),
+      );
+    });
+
+    it('rejects verification for expired challenge', async () => {
+      mockUserService.findById.mockResolvedValue(mockUser);
+      mockUserService.findByEmail.mockResolvedValue(null);
+      mockEmailService.sendEmailChangeVerificationEmail.mockResolvedValue(undefined);
+      mockEmailService.sendEmailChangeNotificationEmail.mockResolvedValue(undefined);
+
+      const request = await service.requestEmailChange(1, newEmail);
+      const token = (request as any).token ?? 'verification-token';
+
+      jest.spyOn((service as any).clock ?? { setSystemTime: jest.fn() }, 'setSystemTime');
+      jest.setSystemTime(new Date(Date.now() + 1000 * 60 * 60 * 24));
+
+      await expect(service.verifyEmailChange(token)).rejects.toBeAppException();
+      jest.useRealTimes();
+    });
+  });
+})

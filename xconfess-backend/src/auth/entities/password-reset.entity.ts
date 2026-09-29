@@ -8,7 +8,7 @@ import {
 } from 'typeorm';
 import { User } from '../../user/entities/user.entity';
 
-@Entity('password_resets')
+@entity('password_resets')
 export class PasswordReset {
   @PrimaryGeneratedColumn()
   id: number;
@@ -26,7 +26,7 @@ export class PasswordReset {
   userId: number;
 
   @ManyToOne(() => User)
-  @JoinColumn({ name: 'userId' })
+  @JoinColumn({ this userId })
   user: User;
 
   @Column({ type: 'timestamp' })

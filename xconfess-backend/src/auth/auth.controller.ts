@@ -380,9 +380,161 @@ export class AuthController {
       }
       const errorMessage =
         error instanceof Error ? error.message : 'Unknown error';
-      throw new BadRequestException(
-        'Failed to reset password: ' + errorMessage,
+      throw new BadRequestException('Failed to reset password: ' + errorMessage);
+    }
+  }
+
+  /**
+   * Email change with verification and rollback.
+   *
+   * Flow:
+   *  1. POST /auth/email/change-request with the new address.
+   *     - The new address is NOT activated yet.
+   *     - A challenge is issued and a verification e-mail is sent to the new address.
+   *     - A notification is sent to the old address (recovery window).
+   *     - The response is generic and does not reveal account existence.
+   *  2. POST /auth/email/change-confirm with the challenge token.
+   *     - Validates the challenge, invalidates it (single-use), and activates the new address.
+   *     - Replayed or expired challenges fail.
+   *  3. POST /auth/email/change-rollback within the recovery window.
+   *     - Restores the previous address and invalidates any pending challenge.
+   */
+  @Post('email/change-request')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @RateLimit(5, 60)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Request an email change (requires verification of the new address)',
+    description:
+      'Issues a single-use challenge and sends a verification e-mail to the new ' +
+      'address. The old address remains active until confirmation and is notified ' +
+      'to allow rollback. The response is generic and does not reveal account ' +
+      'existence.',
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      'If the account exists, a verification e-mail has been sent to the new address.',
+    schema: {
+      example: {
+        message:
+          'If the account exists, a verification email has been sent to the new address.',
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized — missing or invalid JWT.' })
+  @ApiResponse({ status: 429, description: 'Too many email change requests.' })
+  async requestEmailChange(
+    @GetUser('id') userId: number,
+    @Body() body: { newEmail?: string; password?: string },
+    @Req() request: Request,
+  ): Promise<{ message: string }> {
+    const newEmail = body?.newEmail?.trim();
+    if (!newEmail) {
+      throw new BadRequestException('Missing newEmail');
+    }
+
+    const ipAddress =
+      request.ip ||
+      (request.headers['x-forwarded-for'] as string)?.split(',')[0] ||
+      request.connection.remoteAddress;
+    const userAgent = request.headers['user-agent'];
+
+    try {
+      return await this.authService.requestEmailChange(
+        userId,
+        newEmail,
+        body?.password,
+        ipAddress,
+        userAgent,
       );
+    } catch (error) {
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
+      // Do not leak account existence or internal failures.
+      return {
+        message:
+          'If the account exists, a verification email has been sent to the new address.',
+      };
+    }
+  }
+
+  @Post('email/change-confirm')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @RateLimit(10, 60)
+  @ApiOperation({
+    summary: 'Confirm an email change using the challenge token',
+    description:
+      'Activates the new address and invalidates the challenge. Replayed or ' +
+      'expired challenges fail.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Email address updated.',
+    schema: { example: { message: 'Email address updated.' } },
+  })
+  @ApiResponse({ status: 400, description: 'Invalid, expired, or replayed challenge.' })
+  async confirmEmailChange(
+    @Body() body: { token?: string },
+  ): Promise<{ message: string }> {
+    const token = body?.token;
+    if (!token) {
+      throw new BadRequestException('Missing token');
+    }
+
+    try {
+      return await this.authService.confirmEmailChange(token);
+    } catch (error) {
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+      const errorMessage =
+        error instanceof Error ? error.message : 'Unknown error';
+      throw new BadRequestException('Failed to confirm email change: ' + errorMessage);
+    }
+  }
+
+  @Post('email/change-rollback')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @RateLimit(5, 60)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Roll back a recent email change to the previous address',
+    description:
+      'Restores the previous address within the recovery window and invalidates ' +
+      'any pending challenge.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Email address rolled back.',
+    schema: { example: { message: 'Email address rolled back.' } },
+  })
+  @ApiResponse({ status: 400, description: 'Rollback window expired or not available.' })
+  @ApiResponse({ status: 401, description: 'Unauthorized — missing or invalid JWT.' })
+  async rollbackEmailChange(
+    @GetUser('id') userId: number,
+  ): Promise<{ message: string }> {
+    try {
+      return await this.authService.rollbackEmailChange(userId);
+    } catch (error) {
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
+      const errorMessage =
+        error instanceof Error ? error.message : 'Unknown error';
+      throw new BadRequestException('Failed to roll back email change: ' + errorMessage);
     }
   }
 }
