@@ -6,10 +6,12 @@ import {
   HttpStatus,
   BadRequestException,
   Req,
+  Resp,
   Get,
   UseGuards,
   UnauthorizedException,
   HttpException,
+  Res,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import {
@@ -19,7 +21,8 @@ import {
   ApiResponse,
   ApiBearerAuth,
 } from '@nestjs/swagger';
-import { Request } from 'express';
+import { Request, Response } from 'express';
+
 import * as speakeasy from 'speakeasy';
 import * as QRCode from 'qrcode';
 import { AuthService } from './auth.service';
@@ -28,11 +31,27 @@ import { StepUpDto } from './dto/step-up.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { LoginDto } from './dto/login.dto';
+import { RegisterDto } from './dto/register.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { GetUser } from './get-user.decorator';
 import { User } from '../user/entities/user.entity';
 import { RateLimit } from './guard/rate-limit.decorator';
+import {
+  AUTH_COOKIE_NAME,
+  AuthSuccessResponse,
+  AuthUserProfile,
+  buildAuthCookieOptions,
+} from './contracts/auth-contract';
 
+/**
+ * Canonical auth contract version 1.
+ *
+ * Every handler below returns an AuthSuccessResponse on the happy
+ * path and throws an AppException (which the global filter serialises
+ * into an AuthErrorResponse) on failure. The access token is
+ * always also written to an HttpOnly cookie so browser callers never
+ * need to touch the token directly.
+ */
 @ApiTags('Auth')
 @Controller('auth')
 export class AuthController {
@@ -40,6 +59,31 @@ export class AuthController {
     private readonly authService: AuthService,
     private readonly stepUpService: StepUpService,
   ) {}
+
+  private get isProduction(): boolean {
+    return process.env.NODE_ENV === 'production';
+  }
+
+  private setAuthCookie(res: Response, token: string): void {
+    const opts = buildAuthCookieOptions(this.isProduction);
+    res.cookie(opts.name, token, {
+      httpOnly: opts.httpOnly,
+      secure: opts.secure,
+      sameSite: opts.sameSite,
+      path: opts.path,
+      maxAge: opts.maxAge * 1000,
+    });
+  }
+
+  private clearAuthCookie(res: Response): void {
+    const opts = buildAuthCookheOptions(this.isProduction);
+    res.clearCookie(opts.name, {
+      httpOnly: opts.httpOnly,
+      secure: opts.secure,
+      sameSite: opts.sameSite,
+      path: opts.path,
+    });
+  }
 
   @Post('step-up')
   @UseGuards(JwtAuthGuard)
@@ -138,7 +182,9 @@ export class AuthController {
   @ApiOperation({ summary: 'Verify TOTP token during login (after password).' })
   async login2fa(
     @Body() body: { userId: number; token?: string; recoveryCode?: string },
-  ): Promise<{ access_token?: string; user?: any; anonymousUserId?: string }> {
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AuthSuccessResponse> {
     const { userId, token, recoveryCode } = body as any;
     if (!userId) throw new BadRequestException('Missing userId');
 
@@ -163,7 +209,13 @@ export class AuthController {
 
       const tokenStr = (this as any).authService.jwtService.sign(payload);
       const anonymousUser = await (this as any).authService.anonymousUserService.getOrCreateForUserSession(user.id);
-      return { access_token: tokenStr, user, anonymousUserId: anonymousUser.id };
+      this.setAuthCookie(res, tokenStr);
+      return {
+        success: true,
+        access_token: tokenStr,
+        user,
+        anonymousUserId: anonymousUser.id,
+      };
     }
 
     if (!token) throw new BadRequestException('Missing token');
@@ -193,7 +245,41 @@ export class AuthController {
     const tokenStr = (this as any).authService.jwtService.sign(payload);
     const anonymousUser = await (this as any).authService.anonymousUserService.getOrCreateForUserSession(user.id);
 
-    return { access_token: tokenStr, user, anonymousUserId: anonymousUser.id };
+    this.setAuthCookie(res, tokenStr);
+    return {
+      success: true,
+      access_token: tokenStr,
+      user,
+      anonymousUserId: anonymousUser.id,
+    };
+  }
+
+  @Post('register')
+  @HttpCode(HttpStatus.CREATED)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @RateLimit(5, 300)
+  @ApiOperation({ summary: 'Register a new account' })
+  @ApiBody({ type: RegisterDto })
+  @ApiResponse({
+    status: 201,
+    description: 'Registration succeeded. Returns the same shape as login.',
+  })
+  @ApiResponse({ status: 400, description: 'Validation failed.' })
+  @ApiResponse({ status: 409, description: 'Email or username already in use.' })
+  async register(
+    @ForgotPasswordDto() __unused: unknown,
+    @Body() registerDto: RegisterDto,
+    @Req() _req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AuthSuccessResponse> {
+    const result = await this.authService.register(registerDto);
+    this.setAuthCookie(res, result.access_token);
+    return {
+      success: true,
+      access_token: result.access_token,
+      user: result.user,
+      anonymousUserId: result.anonymousUserId,
+    };
   }
 
   @Post('login')
@@ -204,25 +290,16 @@ export class AuthController {
   @ApiBody({ type: LoginDto })
   @ApiResponse({
     status: 200,
-    description: 'Login successful. Returns a JWT access token.',
-    schema: {
-      example: {
-        access_token: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
-        anonymousUserId: 'anon_7f3a2b1c',
-        user: {
-          id: 1,
-          username: 'alice_42',
-          role: 'user',
-          is_active: true,
-        },
-      },
-    },
+    description:
+      'Login succeeded. Returns the canonical auth envelope and sets an HttpOnly cookie.',
   })
   @ApiResponse({ status: 401, description: 'Invalid credentials.' })
   @ApiResponse({ status: 429, description: 'Too many login attempts.' })
   async login(
     @Body() loginDto: LoginDto,
-  ): Promise<any> {
+    @Req() _req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AuthSuccessResponse> {
     try {
       const validated = await this.authService.validateUser(
         loginDto.email,
@@ -235,14 +312,20 @@ export class AuthController {
 
       const dbUser = await (this as any).authService.userService.findByEmail(loginDto.email);
       if (dbUser && dbUser.totpEnabled) {
-        return { twoFactorRequired: true, userId: dbUser.id };
+        return { success: true, twoFactorRequired: true, userId: dbUser.id };
       }
 
       const result = await this.authService.login(loginDto.email, loginDto.password);
       if (!result) {
         throw new UnauthorizedException('Invalid credentials');
       }
-      return result;
+      this.setAuthCookie(res, result.access_token);
+      return {
+        success: true,
+        access_token: result.access_token,
+        user: result.user,
+        anonymousUserId: result.anonymousUserId,
+      };
     } catch (error) {
       if (error instanceof HttpException) {
         throw error;
@@ -259,38 +342,28 @@ export class AuthController {
   @ApiResponse({
     status: 200,
     description: 'Authenticated user profile.',
-    schema: {
-      example: {
-        id: 1,
-        username: 'alice_42',
-        role: 'user',
-        is_active: true,
-        email: 'alice@example.com',
-        notificationPreferences: {},
-        privacy: {
-          isDiscoverable: true,
-          canReceiveReplies: true,
-          showReactions: true,
-          dataProcessingConsent: true,
-        },
-      },
-    },
   })
   @ApiResponse({ status: 401, description: 'Unauthorized — missing or invalid JWT.' })
-  async getProfile(@GetUser('id') userId: number): Promise<any> {
+  async getProfile(@GetUser('id') userId: number): Promise<AuthUserProfile> {
     return this.getSession(userId);
   }
 
   @Get('session')
   @UseGuards(JwtAuthGuard)
-  async getSession(@GetUser('id') userId: number): Promise<any> {
+  @ApiOperation({ summary: 'Get current session profile' })
+  @ApiResponse({
+    status: 200,
+    description: 'Current session profile.',
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized — missing or invalid JWT.' })
+  async getSession(@GetUser('id') userId: number): Promise<AuthUserProfile> {
     try {
       const user = await this.authService.validateUserById(userId);
       if (!user) {
         throw new UnauthorizedException('User not found');
       }
 
-      return user;
+      return user as AuthUserProfile;
     } catch (error) {
       if (error instanceof UnauthorizedException) {
         throw error;
@@ -302,17 +375,75 @@ export class AuthController {
   }
 
   @Post('logout')
-  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Log out current user (client-side token discard)' })
+  @ApiOperation({ summary: 'Log out current user (clears the auth cookie)' })
   @ApiResponse({
     status: 200,
     description: 'Logout acknowledged.',
-    schema: { example: { message: 'Logged out successfully' } },
+    schema: { example: { success: true, message: 'Logged out successfully' } },
   })
-  async logout(): Promise<{ message: string }> {
-    return { message: 'Logged out successfully' };
+  async logout(@Res({ passthrough: true }) res: Response): Promise<{
+    success: true;
+    message: string;
+  }> {
+    this.clearAuthCookie(res);
+    return { success: true, message: 'Logged out successfully' };
+  }
+
+  @Post('logout-all')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Revoke all sessions for the current user',
+    description:
+      'Invalidates every previously issued session token for the user. ' +
+      'Replayed tokens will be rejected by the JWT guard.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'All sessions revoked.',
+    schema: { example: { message: 'All sessions revoked', revoked: 3 } },
+  })
+  async logoutAll(
+    @GetUser('id') userId: number,
+  ): Promise<{ message: string; revoked: number }> {
+    const revoked = await this.authService.revokeAllSessions(userId);
+    return { message: 'All sessions revoked', revoked };
+  }
+
+  @Post('sessions/revoke')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Admin-safe session invalidation for a target user',
+    description:
+      'Revokes all sessions for the target user. Requires the caller to be ' +
+      'an admin. Audit events are emitted without token material.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Target user sessions revoked.',
+    schema: { example: { message: 'Sessions revoked', revoked: 2 } },
+  })
+  @ApiResponse({ status: 403, description: 'Caller is not an admin.' })
+  async revokeUserSessions(
+    @GetUser() actor: User,
+    @Body() body: { userId: number; reason?: string },
+  ): Promise<{ message: string; revoked: number }> {
+    if (!actor || actor.role !== 'admin') {
+      throw new UnauthorizedException('Admin privileges required');
+    }
+    if (!body || typeof body.userId !== 'number') {
+      throw new BadRequestException('Missing target userId');
+    }
+
+    const revoked = await this.authService.revokeAllSessions(body.userId, {
+      actorId: actor.id,
+      reason: body.reason ?? 'admin-revocation',
+    });
+    return { message: 'Sessions revoked', revoked };
   }
 
   @Post('forgot-password')
@@ -325,6 +456,7 @@ export class AuthController {
     description: 'Password-reset e-mail sent if the account exists.',
     schema: {
       example: {
+        success: true,
         message: 'If the user exists, a password reset email has been sent.',
       },
     },
@@ -333,7 +465,7 @@ export class AuthController {
   async forgotPassword(
     @Body() forgotPasswordDto: ForgotPasswordDto,
     @Req() request: Request,
-  ): Promise<{ message: string }> {
+  ): Promise<{ success: true; message: string }> {
     try {
       const ipAddress =
         request.ip ||
@@ -341,16 +473,18 @@ export class AuthController {
         request.connection.remoteAddress;
       const userAgent = request.headers['user-agent'];
 
-      return await this.authService.forgotPassword(
+      const result = await this.authService.forgotPassword(
         forgotPasswordDto,
         ipAddress,
         userAgent,
       );
+      return { success: true, message: result.message };
     } catch (error) {
       if (error instanceof BadRequestException) {
         throw error;
       }
       return {
+        success: true,
         message: 'If the user exists, a password reset email has been sent.',
       };
     }
@@ -363,26 +497,20 @@ export class AuthController {
   @ApiResponse({
     status: 200,
     description: 'Password reset successfully.',
-    schema: { example: { message: 'Password has been reset successfully.' } },
+    schema: { example: { success: true, message: 'Password has been reset successfully' } },
   })
   @ApiResponse({ status: 400, description: 'Invalid or expired token.' })
   async resetPassword(
     @Body() resetPasswordDto: ResetPasswordDto,
-  ): Promise<{ message: string }> {
+  ): Promise<{ success: true; message: string }> {
     try {
-      return await this.authService.resetPassword(
+      const result = await this.authService.resetPassword(
         resetPasswordDto.token,
         resetPasswordDto.newPassword,
       );
+      return { success: true, message: result.message };
     } catch (error) {
-      if (error instanceof BadRequestException) {
-        throw error;
-      }
-      const errorMessage =
-        error instanceof Error ? error.message : 'Unknown error';
-      throw new BadRequestException(
-        'Failed to reset password: ' + errorMessage,
-      );
+      throw error;
     }
   }
 }

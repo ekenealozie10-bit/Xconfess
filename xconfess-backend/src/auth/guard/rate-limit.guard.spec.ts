@@ -2,6 +2,7 @@ import { ExecutionContext, HttpException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { RateLimitGuard } from './rate-limit.guard';
+import { RateLimitStore } from './rate-limit.store';
 import { getRateLimitConfig } from '../../config/rate-limit.config';
 
 jest.mock('../../config/rate-limit.config');
@@ -10,6 +11,7 @@ describe('RateLimitGuard', () => {
   let guard: RateLimitGuard;
   let reflector: jest.Mocked<Reflector>;
   let configService: jest.Mocked<ConfigService>;
+  let store: RateLimitStore;
 
   const mockGetRateLimitConfig = getRateLimitConfig as jest.Mock;
 
@@ -31,11 +33,19 @@ describe('RateLimitGuard', () => {
       messageSendWindow: 60,
       messagePairLimit: 3,
       messagePairWindow: 60,
+      anonymousLimit: 50,
+      anonymousWindow: 60,
+      highRiskLimit: 2,
+      highRiskWindow: 60,
     });
+
+    // Real in-memory store with no Redis configured.
+    configService.get.mockReturnValue(undefined);
+    store = new RateLimitStore(configService);
 
     jest.useFakeTimers();
 
-    guard = new RateLimitGuard(reflector, configService);
+    guard = new RateLimitGuard(reflector, configService, store);
   });
 
   afterEach(() => {
@@ -47,14 +57,14 @@ describe('RateLimitGuard', () => {
     method: string,
     ip: string,
     handler: any = () => {},
-    options: { user?: any; body?: any; params?: any } = {},
+    options: { user?: any; body?: any; params?: any; headers?: any } = {},
   ): ExecutionContext => {
     return {
       switchToHttp: () => ({
         getRequest: () => ({
           method,
           ip,
-          headers: {},
+          headers: options.headers || {},
           socket: { remoteAddress: ip },
           user: options.user,
           body: options.body || {},
@@ -91,13 +101,13 @@ describe('RateLimitGuard', () => {
       'POST',
       '127.0.0.1',
       () => {},
-      { user: { sub: 'user-1' } },
+      { user: { sub: 'user-1', role: 'user' } },
     );
     const user2Context = createMockExecutionContext(
       'POST',
       '127.0.0.1',
       () => {},
-      { user: { sub: 'user-2' } },
+      { user: { sub: 'user-3', role: 'user' } },
     );
 
     reflector.get.mockReturnValue({ limit: 2, window: 60 });
@@ -115,13 +125,13 @@ describe('RateLimitGuard', () => {
       'POST',
       '127.0.0.1',
       () => {},
-      { user: { sub: 'sender-1' }, body: { confession_id: 'confession-A' } },
+      { user: { sub: 'sender-1', role: 'user' }, body: { confession_id: 'confession-A' } },
     );
     const contextPairB = createMockExecutionContext(
       'POST',
       '127.0.0.1',
       () => {},
-      { user: { sub: 'sender-1' }, body: { confession_id: 'confession-B' } },
+      { user: { sub: 'sender-1', role: 'user' }, body: { confession_id: 'confession-B' } },
     );
 
     reflector.get.mockReturnValue({
@@ -175,5 +185,85 @@ describe('RateLimitGuard', () => {
 
     // GET requests should still succeed
     expect(await guard.canActivate(getContext)).toBe(true);
+  });
+
+  it('should bypass the limit for trusted admin roles', async () => {
+    const adminContext = createMockExecutionContext(
+      'POST',
+      '10.0.0.1',
+      () => {},
+      { user: { sub: 'admin-1', role: 'admin' } },
+    );
+    reflector.get.mockReturnValue({ limit: 1, window: 60 });
+
+    for (let i = 0; i < 5; i++) {
+      expect(await guard.canActivate(adminContext)).toBe(true);
+    }
+  });
+
+  it('should give high-risk operations a separate budget from low-risk operations', async () => {
+    const highRiskHandler = () => {};
+    Object.defineProperty(highRiskHandler, 'name', { value: 'highRiskHandler' });
+    const lowRiskHandler = () => {};
+    Object.defineProperty(lowRiskHandler, 'name', { value: 'lowRiskHandler' });
+
+    const highRiskContext = createMockExecutionContext(
+      'POST',
+      '10.0.0.2',
+      highRiskHandler,
+      { user: { sub: 'user-hr', role: 'user' } },
+    );
+    const lowRiskContext = createMockExecutionContext(
+      'POST',
+      '10.0.0.2',
+      lowRiskHandler,
+      { user: { sub: 'user-hr', role: 'user' } },
+    );
+
+    reflector.get.mockImplementation((key: string, handler: any) => {
+      if (handler === highRiskHandler) {
+        return { limit: 100, window: 60, risk: 'high' };
+      }
+      return { limit: 100, window: 60, risk: 'low' };
+    });
+
+    // Exhaust the high-risk budget (2 tokens).
+    await guard.canActivate(highRiskContext);
+    await guard.canActivate(highRiskContext);
+    await expect(guard.canActivate(highRiskContext)).rejects.toThrow(HttpException);
+
+    // Low-risk operations for the same user are unaffected.
+    expect(await guard.canActivate(lowRiskContext)).toBe(true);
+  });
+
+  it('should apply a tighter budget for low-reputation IPs', async () => {
+    const reputationGuard = new RateLimitGuard(reflector, configService, store, {
+      ipReputation: () => 0.1,
+    });
+
+    const context = createMockExecutionContext('GET', '192.0.2.1');
+    reflector.get.mockReturnValue(undefined);
+
+    // getLimit * 0.25 = 12 tokens.
+    for (let i = 0; i < 12; i++) {
+      await reputationGuard.canActivate(context);
+    }
+    await expect(reputationGuard.canActivate(context)).rejects.toThrow(
+      HttpException,
+    );
+  });
+
+  it('should emit decision records via the onDecision hook', async () => {
+    const decisions : any[] = [];
+    const observingGuard = new RateLimitGuard(reflector, configService, store, {
+      onDecision: (record) => decisions.push(record),
+    });
+
+    const context = createMockExecutionContext('GET', '192.0.2.2');
+    reflector.get.mockReturnValue(undefined);
+
+    await observingGuard.canActivate(context);
+    expect(decisions.length).beGreaterThan(0);
+    expect(decisions[0]).toMatchObject({ allowed: true });
   });
 });

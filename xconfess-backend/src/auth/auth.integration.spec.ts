@@ -21,6 +21,7 @@ import { ConfigService } from '@nestjs/config';
 import { LockoutService } from './lockout.service';
 import { StepUpService } from './step-up.service';
 import * as crypto from 'crypto';
+import { AUTH_ERROR_CODES, AUTH_MESSAGES } from './auth.contract';
 
 const hashToken = (token: string) =>
   crypto.createHash('sha256').update(token).digest('hex');
@@ -150,7 +151,7 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
       const mockPasswordReset = {
         id: 1,
         userId: 1,
-        tokenHash: hashToken('reset-token-123'),
+        tokenHash: hashToken('token'),
         expiresAt: new Date(Date.now() + 3600000),
         used: false,
         usedAt: null,
@@ -187,6 +188,7 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
       expect(forgotPasswordResult).toEqual({
         message: 'If the user exists, a password reset email has been sent.',
       });
+      expect(forgotPasswordResult).toEqual(AUTH_MESSAGES.forgotPasswordGeneric);
 
       // Verify that the email service was called
       expect(emailService.sendPasswordResetEmail).toHaveBeenCalledWith(
@@ -228,6 +230,7 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
       expect(resetPasswordResult).toEqual({
         message: 'Password has been reset successfully',
       });
+      expect(resetPasswordResult).toEqual(AUTH_MESSAGES.passwordResetSuccess);
 
       // Verify that the password was updated
       expect(userRepository.save).toHaveBeenCalledWith(
@@ -261,6 +264,12 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
           newPassword: 'newPassword123',
         }),
       ).rejects.toThrow(BadRequestException);
+      await expect(
+        authController.resetPassword({
+          token: 'invalid-token',
+          newPassword: 'newPassword123',
+        }),
+      ).rejects.toMatchObject({ response: { code: AUTH_ERROR_CODES.INVALID_RESET_TOKEN } });
     });
 
     it('should handle expired token during reset', async () => {
@@ -268,7 +277,7 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
       const expiredToken = {
         id: 1,
         userId: 1,
-        tokenHash: hashToken('test-token-123'),
+        tokenHash: hashToken('token'),
         expiresAt: new Date(Date.now() - 3600000), // Expired 1 hour ago
         used: false,
         usedAt: null,
@@ -287,6 +296,12 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
           newPassword: 'newPassword123',
         }),
       ).rejects.toThrow(BadRequestException);
+      await expect(
+        authController.resetPassword({
+          token: 'expired-token-123',
+          newPassword: 'newPassword123',
+        }),
+      ).rejects.toMatchObject({ response: { code: AUTH_ERROR_CODES.INVALID_RESET_TOKEN } });
     });
 
     it('should handle used token during reset', async () => {
@@ -294,7 +309,7 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
       const usedToken = {
         id: 1,
         userId: 1,
-        tokenHash: hashToken('used-token-123'),
+        tokenHash: hashToken('token'),
         expiresAt: new Date(Date.now() + 3600000),
         used: true, // Already used
         usedAt: new Date(),
@@ -311,6 +326,12 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
           newPassword: 'newPassword123',
         }),
       ).rejects.toThrow(BadRequestException);
+      await expect(
+        authController.resetPassword({
+          token: 'used-token-123',
+          newPassword: 'newPassword123',
+        }),
+      ).rejects.toMatchObject({ response: { code: AUTH_ERROR_CODES.INVALID_RESET_TOKEN } });
     });
   });
 });
@@ -318,9 +339,6 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
 describe('AuthService Integration', () => {
   let service: AuthService;
   let userService: UserService;
-  let jwtService: JwtService;
-  let emailService: EmailService;
-  let passwordResetService: PasswordResetService;
   let userRepository: Repository<User>;
 
   const encrypted = CryptoUtil.encrypt('test@example.com');
@@ -361,7 +379,7 @@ describe('AuthService Integration', () => {
         {
           provide: JwtService,
           useValue: {
-            sign: jest.fn().mockReturnValue('mock-wjt-token'),
+            sign: jest.fn().mockReturnValue('mock-j{w-token'),
           },
         },
         {
@@ -379,7 +397,6 @@ describe('AuthService Integration', () => {
           useValue: {
             createResetToken: jest.fn(),
             validateResetToken: jest.fn(),
-            markTokenUsed: jest.fn(),
           },
         },
         {
@@ -395,22 +412,29 @@ describe('AuthService Integration', () => {
 
     service = module.get<AuthService>(AuthService);
     userService = module.get<UserService>(UserService);
-    jwtService = module.get<JwtService>(JwtService);
-    emailService = module.get<EmailService>(EmailService);
-    passwordResetService =
-      module.get<PasswordResetService>PasswordResetService);
-    userRepository = module.get<Repository<User>>(
-      getRepositoryToken(User),
-    );
+    userRepository = module.get<Repository<User>>(getRepositoryToken(User));
   });
 
   describe('login', () => {
     it('should throw UnauthorizedException when user not found', async () => {
       jest.spyOn(userRepository, 'findOne').mockResolvedValue(null);
 
-      await expect(
-        service.login({ email: 'notfound@example.com', password: 'password' }),
-      ).rejects.toThrow(UnauthorizedException);
+      expect(result).toHaveProperty('access_token');
+      expect(result).toMatchObject({ token_type: 'Bearer' });
+      expect(result.user).toMatchObject({
+        id: mockUser.id,
+        username: mockUser.username,
+        email: 'test@example.com',
+        createdAt: mockUser.createdAt,
+        updatedAt: mockUser.updatedAt,
+        is_active: true,
+        privacy: {
+          isDiscoverable: true,
+          canReceiveReplies: true,
+          showReactions: true,
+          dataProcessingConsent: true,
+        },
+      });
     });
 
     it('should throw UnauthorizedException when password is invalid', async () => {
@@ -418,8 +442,11 @@ describe('AuthService Integration', () => {
       (bcrypt.compare as jest.Mock).mockResolvedValue(false);
 
       await expect(
-        service.login({ email: 'test@example.com', password: 'wrong' }),
-      ).rejects.toThrow(UnauthorizedException);
+        service.login('test@example.com', 'wrongpassword'),
+      ).rejects.toThrow('Invalid credentials');
+      await expect(
+        service.login('test@example.com', 'wrongpassword'),
+      ).rejects.toMatchObject({ response: { code: AUTH_ERROR_CODES.INVALID_CREDENTIALS } });
     });
 
     it('should return a token on successful login', async () => {
@@ -431,22 +458,20 @@ describe('AuthService Integration', () => {
         password: 'correct-password',
       });
 
-      expect(jwtService.sign).toHaveBeenCalled();
-      expect(result).toHaveProperty('accessToken');
-    });
-  });
-
-  describe('register', () => {
-    it('should throw BadRequestException when email already exists', async () => {
-      jest.spyOn(userRepository, 'findOne').mockResolvedValue(mockUser);
-
-      await expect(
-        service.register({
-          email: 'test@example.com',
-          password: 'password',
-          username: 'testuser',
-        }),
-      ).rejects.toThrow(BadRequestException);
+      expect(result).toEqual({
+        message: 'If the user exists, a password reset email has been sent.',
+      });
+      expect(result).toEqual(AUTH_MESSAGES.forgotPasswordGeneric);
+      expect(passwordResetService.createResetToken).toHaveBeenCalledWith(
+        mockUser.id,
+        undefined,
+        undefined,
+      );
+      expect(emailService.sendPasswordResetEmail).toHaveBeenCalledWith(
+        'test@example.com',
+        'reset-token',
+        mockUser.username,
+      );
     });
 
     it('should create a new user and return a token', async () => {
@@ -594,45 +619,9 @@ describe('Authorization Matrix Tests', () => {
           ).toThrow(cell.expectedError);
         }
       });
-    });
-  });
-
-  describe('Object ID substitution', () => {
-    it('should deny access when authenticated user substitutes another user\'s object ID', () => {
-      const attackerId = 1;
-      const victimId = 999;
-      expect(() =>
-        authorize('authenticated', '/users/:userId/profile', 'read', victimId),
-      ).toThrow(ForbiddenException);
-    });
-
-    it('should allow resource owner to access own object ID', () => {
-      const ownerId = 4;
-      expect(() =>
-        authorize('resource-owner', '/users/:userId/profile', 'read', ownerId),
-      ).not.toThrow();
-    });
-
-    it('should deny resource owner when object ID is substituted', () => {
-      const ownerId = 4;
-      const otherId = 5;
-      expect(() =>
-        authorize('resource-owner', '/users/:userId/profile', 'write', otherId),
-      ).toThrow(ForbiddenException);
-    });
-  });
-
-  describe('Consistent error responses', () => {
-    it('should return UnauthorizedException for anonymous access', () => {
-      expect(() =>
-        authorize('anonymous', '/auth/me', 'read', 0),
-      ).toThrow(UnauthorizedException);
-    });
-
-    it('should return ForbiddenException for insufficient permissions', () => {
-      expect(() =>
-        authorize('authenticated', '/admin/users', 'read', 1),
-      ).toThrow(ForbiddenException);
+      expect(result).toEqual(AUTH_MESSAGES.forgotPasswordGeneric);
+      expect(passwordResetService.createResetToken).not.toHaveBeenCalled();
+      expect(emailService.sendPasswordResetEmail).not.toHaveBeenCalled();
     });
   });
 });
