@@ -159,6 +159,7 @@ import { RateLimitGuard } from './rate-limit/rate-limit.guard';
     FeatureFlagsModule,
     BookmarkModule,
     KeyRotationModule,
+    SecurityModule,
   ],
   controllers: [AppController],
   providers: [
@@ -188,7 +189,9 @@ import { RateLimitGuard } from './rate-limit/rate-limit.guard';
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    // RequestIdMiddleware first so downstream handlers/loggers can read
+    // SecurityHeadersMiddleware first so every response (including error
+    // responses) carries the CSP and baseline security headers.
+    // RequestIdMiddleware next so downstream handlers/loggers can read
     // req.requestId, and so it's set even if SanitizationMiddleware throws.
     // CSRFMiddleware applies to every route and enforces double-submit
     // tokens on cookie-authenticated mutations.

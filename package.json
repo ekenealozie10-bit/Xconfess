@@ -45,7 +45,6 @@
     "frontend:lint": "npm run lint --workspace=xconfess-frontend",
     "frontend:typecheck": "npm run typecheck --workspace=xconfess-frontend",
     "frontend:budget": "node scripts/check-frontend-budget.js",
-    "contract:fmt:check": "npm run fmt:check --workspace=xconfess-contracts",
     "ci:backend": "npm run backend:build && npm run backend:lint && npm run backend:test",
     "ci:frontend": "npm run frontend:lint && npm run frontend:typecheck && npm run frontend:test && npm run frontend:build && npm run frontend:budget",
     "ci:contract": "npm run contract:fmt:check && npm run contract:lint && npm run contract:test && npm run contract:build:release",
