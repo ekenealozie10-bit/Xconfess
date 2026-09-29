@@ -27,6 +27,7 @@ name: Release Pipeline
 # Optional secrets:
 #   STAGING_URL   — base URL used for post-deploy smoke test (staging env)
 #   PRODUCTION_URL — base URL for production smoke test
+#   SBOM_SIGNING_KEY — optional key used to sign SBOM artifacts
 
 on:
   push:
@@ -69,6 +70,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
   NEXT_TELEMETRY_DISABLED: '1'
   ARTIFACT_RETENTION_DAYS: 14
+  SBOM_DIR: sbom
 
 # ── Stage 1: Build ────────────────────────────────────────────────────────────
 jobs:
@@ -180,6 +182,65 @@ jobs:
         id: artifact-id
         run: echo "artifact_id=xconfess-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
+      # Generate SBOM artifacts for backend, frontend, and contracts.
+      # Transitive dependencies are represented via CycloneDX npm/cargo generators.
+      - name: Generate SBOM — backend
+        run: |
+          mkdir -p "$SBOM_DIR"
+          npx --yes @cyclonedx/cyclonedx-npm@^1 \
+            --output-format json \
+            --output-file "$SBOM_DIR/backend.cdx.json" \
+            --package-lock-only \
+            --project-type application \
+            --spec-version 1.5 \
+            --validate
+
+      - name: Generate SBOM — frontend
+        run: |
+          mkdir -p "$SBOM_DIR"
+          npx --yes @cyclonedx/cyclonedx-npm@^1 \
+            --output-format json \
+            --output-file "$SBOM_DIR/frontend.cdx.json" \
+            --package-lock-only \
+            --project-type application \
+            --spec-version 1.5 \
+            --validate
+
+      - name: Install cargo-cyclonedx
+        run: cargo install cargo-cyclonedx --locked
+
+      - name: Generate SBOM — contracts
+        working-directory: xconfess-contracts
+        run: |
+          mkdir -p "../$SBOM_DIR"
+          cargo cyclonedx --format json --spec-version 1.5 --output-pattern package
+          find . -name '*.cdx.json' -exec cp {} "../$SBOM_DIR/contracts.cdx.json" \;
+
+      - name: Validate SBOM artifacts
+        run: |
+          set -euo pipefail
+          for f in "$SBOM_DIR"/backend.cdx.json "$SBOM_DIR"/frontend.cdx.json "$SBOM_DIR"/contracts.cdx.json; do
+            if [ ! -s "$f" ]; then
+              echo "::error::Missing or empty SBOM artifact: $f"
+              exit 1
+            fi
+            node -e "const s=require('./'+process.argv[1]); if(!s.bomFormat||!s.components||!s.components.length){console.error('Malformed SBOM: '+process.argv[1]);process.exit(1)}" "$f"
+          done
+
+      - name: Checksum SBOM artifacts
+        run: |
+          cd "$SBOM_DIR"
+          sha256sum ./*.cdx.json > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact-id.outputs.artifact_id }}-sbom
+          path: ${{ env.SBOM_DIR }}
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+          if-no-files-found: error
+
       # Upload immutable build artifacts tagged with commit SHA
       - name: Upload backend artifact
         uses: actions/upload-artifact@v4
@@ -206,6 +267,7 @@ jobs:
             echo "|-------|-------|"
             echo "| Commit | \`${{ github.sha }}\` |"
             echo "| Artifact ID | \`${{ steps.artifact-id.outputs.artifact_id }}\` |"
+            echo "| SBOM | \`${{ steps.artifact-id.outputs.artifact_id }}-sbom\` |"
             echo "| Triggered by | @${{ github.actor }} |"
             echo "| Reason | ${{ github.event.inputs.reason || 'push to main' }} |"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -494,6 +556,12 @@ jobs:
       - name: Install dependencies
         run: npm ci --include=optional --no-audit --no-fund
 
+      - name: Download SBOM artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact_id }}-sbom
+          path: sbom
+
       - name: Production smoke test
         id: smoke
         env:
@@ -501,6 +569,15 @@ jobs:
         run: node scripts/deployed-smoke.js
         # Do not continue on error — failure triggers the rollback notice below
         continue-on-error: true
+
+      - name: Verify SBOM provenance
+        run: |
+          set -euo pipefail
+          cd sbom
+          sha256sum -c SHA256SUMS
+          for f in ./*.cdx.json; do
+            node -e "const s=require('./'+process.argv[1]); if(!s.bomFormat||!s.components||!s.components.length){console.error('Malformed SBOM: '+process.argv[1]);process.exit(1)}" "$f"
+          done
 
       - name: Smoke test passed
         if: steps.smoke.outcome == 'success'
