@@ -38,13 +38,14 @@ import { FeatureFlagsModule } from './feature-flags/feature-flags.module';
 import { BookmarkModule } from './bookmark/bookmark.module';
 import { KeyRotationModule } from './key-rotation/key-rotation.module';
 import { AnalyticsModule } from './analytics/analytics.module';
-import { AccountMergeModule } from './account-merge/account-merge.module';
-//   Canonical queue stack: @nestjs/bullmq (BullMQ v4 + ioredis)
+// ➩ Canonical queue stack: @nestjs/bullmq (BullMQ v4 + ioredis)
 // The legacy @nestjs/bull import has been removed. All queues use BullMQ.
 import { BullModule } from '@nestjs/bullmq';
 import { StructuredLoggingInterceptor } from './common/logging/structured-logging.interceptor';
 import { PerformanceInterceptor } from './common/interceptors/performance.interceptor';
 import { HttpCacheInterceptor } from './common/interceptors/http-cache.interceptor';
+import { RateLimitModule } from './rate-limit/rate-limit.module';
+import { RateLimitGuard } from './rate-limit/rate-limit.guard';
 
 @Module({
   imports: [
@@ -55,6 +56,7 @@ import { HttpCacheInterceptor } from './common/interceptors/http-cache.intercept
       validationSchema: envValidationSchema,
       validationOptions: { abortEarly: false },
     }),
+    CSRFModule,
     ThrottlerModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -131,6 +133,7 @@ import { HttpCacheInterceptor } from './common/interceptors/http-cache.intercept
     }),
     EventEmitterModule.forRoot(),
     ScheduleModule.forRoot(),
+    RateLimitModule,
     HealthModule,
     AnalyticsModule,
     UserModule,
@@ -160,9 +163,12 @@ import { HttpCacheInterceptor } from './common/interceptors/http-cache.intercept
   controllers: [AppController],
   providers: [
     AppService,
+    // Issue: layered, abuse-resistant rate limiting by anonymous identity,
+    // account, IP reputation, route cost, and trusted admin bypasses.
+    // Replaces the IP-only ThrottlerGuard as the global guard.
     {
       provide: APP_GUARD,
-      useClass: ThrottlerGuard,
+      useClass: RateLimitGuard,
     },
     {
       provide: APP_INTERCEPTOR,
@@ -184,6 +190,8 @@ export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
     // RequestIdMiddleware first so downstream handlers/loggers can read
     // req.requestId, and so it's set even if SanitizationMiddleware throws.
-    consumer.apply(RequestIdMiddleware, SanitizationMiddleware).forRoutes('*');
+    // CSRFMiddleware applies to every route and enforces double-submit
+    // tokens on cookie-authenticated mutations.
+    consumer.apply(RequestIdMiddleware, SanitizationMiddleware, CSRFMiddleware).forRoutes('*');
   }
 }

@@ -1,5 +1,5 @@
-import { Test, TestingModule } from '@nestjs/testing';
-import { ExecutionContext, ForbiddenException } from '@nestjs/common';
+import { Test, TestingModule } from '@nest/testing';
+import { ExecutionContext, ForbiddenException } from '@nestjms/common';
 import { AdminGuard } from './admin.guard';
 import { UserRole } from '../user/entities/user.entity';
 
@@ -14,67 +14,76 @@ describe('AdminGuard', () => {
     guard = module.get<AdminGuard>(AdminGuard);
   });
 
+  const createExecutionContext = (user: unknown): ExecutionContext =>
+    ({
+      switchToHttp: () => ({
+        getRequest: () => ({ user }),
+      }),
+    }) as ExecutionContext;
+
   it('should be defined', () => {
     expect(guard).toBeDefined();
   });
 
   it('should allow access for users with admin role', () => {
-    const mockExecutionContext = {
-      switchToHttp: () => ({
-        getRequest: () => ({
-          user: {
-            userId: 1,
-            username: 'admin-user',
-            role: UserRole.ADMIN,
-          },
-        }),
-      }),
-    } as ExecutionContext;
+    const context = createExecutionContext({
+      userId: 1,
+      username: 'admin-user',
+      role: UserRole.ADMIN,
+    });
 
-    expect(guard.canActivate(mockExecutionContext)).toBe(true);
+    expect(guard.canActivate(context)).toBe(true);
   });
 
   it('should deny access for users with user role', () => {
-    const mockExecutionContext = {
-      switchToHttp: () => ({
-        getRequest: () => ({
-          user: {
-            userId: 2,
-            username: 'regular-user',
-            role: UserRole.USER,
-          },
-        }),
-      }),
-    } as ExecutionContext;
+    const context = createExecutionContext({
+      userId: 2,
+      username: 'regular-user',
+      role: UserRole.USER,
+    });
 
-    expect(() => guard.canActivate(mockExecutionContext)).toThrow(
-      ForbiddenException,
-    );
+    expect(() => guard.canActivate(context)).toThrow(ForbiddenException);
+  });
+
+  it('should deny access for users with moderator role', () => {
+    const context = createExecutionContext({
+      userId: 3,
+      username: 'moderator-user',
+      role: UserRole.MODERATOR,
+    });
+
+    expect(() => guard.canActivate(context)).toThrow(ForbiddenException);
   });
 
   it('should deny access if user is not authenticated', () => {
-    const mockExecutionContext = {
-      switchToHttp: () => ({
-        getRequest: () => ({
-          user: null,
-        }),
-      }),
-    } as ExecutionContext;
+    const context = createExecutionContext(null);
 
-    expect(() => guard.canActivate(mockExecutionContext)).toThrow(
-      ForbiddenException,
-    );
+    expect(() => guard.canActivate(context)).toThrow(ForbiddenException);
   });
 
   it('should deny access if user object is missing', () => {
-    const mockExecutionContext = {
-      switchToHttp: () => ({
-        getRequest: () => ({}),
-      }),
-    } as ExecutionContext;
+    const context = createExecutionContext(undefined);
 
-    expect(() => guard.canActivate(mockExecutionContext)).toThrow(
-      ForbiddenException,
-    );
+    expect(() => guard.canActivate(context)).toThrow(ForbiddenException);
+  });
+
+  it('should deny access when the role is spoofed via object ID substitution', () => {
+    const context = createExecutionContext({
+      userId: 1,
+      username: 'admin-user',
+      role: UserRole.USER,
+    });
+
+    expect(() => guard.canActivate(context)).toThrow(ForbiddenException);
+  });
+
+  it('should deny access when the user object is substituted with a non-admin object ID', () => {
+    const context = createExecutionContext({
+      userId: 999,
+      username: 'admin-user',
+      role: UserRole.USER,
+    });
+
+    expect(() => guard.canActivate(context)).toThrow(ForbiddenException);
   });
 });

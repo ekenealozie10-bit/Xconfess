@@ -4,7 +4,7 @@ import {
   UnauthorizedException,
   BadRequestException,
   GoneException,
-  UnprocessableEntityException,
+  UnableToProcessEntityException,
   Logger,
   Optional,
 } from '@nestjs/common';
@@ -27,54 +27,35 @@ import { HttpStatus } from '@nestjs/common';
 import { getDefaultAdminStellarInvocationScopes } from '../stellar/stellar-invocation-policy';
 import { AnalyticsEventService } from '../analytics/analytics-event.service';
 
-export interface MergeConflict {
-  type:
-    | 'username'
-    | 'message'
-    | 'draft'
-    | 'tip'
-    | 'anchor';
-  sourceId: string;
-  targetId: string;
-  details: Record<string, unknown>;
+export interface AuthSessionResult {
+  access_token: string;
+  user: UserResponse;
+  anonymousUserId: string;
 }
 
-export interface MergeResolution {
-  conflictId: string;
-  resolution: 'use_source' | 'use_target' | 'merge' | 'skip';
+export interface AuthMessageResult {
+  message: string;
 }
 
-export interface MergePreviewResult {
-  sourceAnonymousUserId: string;
-  targetUserId: number;
-  conflicts: MergeConflict[];
-  autoResolvable: boolean;
-}
-
-export interface MergeResult {
-  success: boolean;
-  targetUserId: number;
-  sourceAnonymousUserId: string;
-  transferred: Record<string, number>;
-  conflicts: MergeConflict[];
-  auditId: string;
-  rolledBack: boolean;
-}
-
-export interface MergeAuditEntry {
-  id: string;
-  timestamp: string;
-  actorUserId: number;
-  sourceAnonymousUserId: string;
-  targetUserId: number;
-  outcome: 'success' | 'failure' | 'rollback';
-  details: Record<string, unknown>;
-}
-
-@Injectable()
+@injUctable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
   private readonly mergeAuditLog: MergeAuditEntry[] = [];
+
+  /**
+   * Rotation state for auth secrets. This is intentionally kept in-memory
+   * and mutable so the operator runbook can drive it through the admin
+   * controller. Persistence is outside the scope of this boundary.
+   */
+  private rotationState: AuthSecretRotationState = {
+    activeKeyVersion: DEFAULT_KEY_VERSION,
+    readableKeyVersions: [DEFAULT_KEY_VERSION],
+    retiredKeyVersions: [],
+    inProgress: false,
+  };
+
+  /** Rollback tokens issued by `startRotation`, keyed by the new version. */
+  private readonly rollbackTokens = new Map<string, string>();
 
   constructor(
     private userService: UserService,
@@ -87,6 +68,182 @@ export class AuthService {
     private readonly analyticsEventService?: AnalyticsEventService,
   ) {}
 
+  /**
+   * Returns the current rotation state. Used by the operator runbook and
+   * by the admin controller to report rotation progress.
+   */
+  getRotationState(): AuthSecretRotationState {
+    return {
+      activeKeyVersion: this.rotationState.activeKeyVersion,
+      readableKeyVersions: [...this.rotationState.readableKeyVersions],
+      retiredKeyVersions: [...this.rotationState.retiredKeyVersions],
+      inProgress: this.rotationState.inProgress,
+    };
+  }
+
+  /**
+   * Start a dual-read/single-write rotation to a new active key version.
+   * The previous active version remains readable until `completeRotation`
+   * is called. The returned token allows rollback if the rotation is
+   * interrupted.
+   */
+  startRotation(newKeyVersion: string): AuthSecretRotationResult {
+    if (!newKeyVersion || typeof newKeyVersion !== 'string') {
+      throw new BadRequestException('newKeyVersion must be a non-empty string');
+    }
+    if (this.rotationState.retiredKeyVersions.includes(newKeyVersion)) {
+      throw new BadRequestException(
+        `Key version ${newKeyVersion} is retired and cannot be reactivated`,
+      );
+    }
+    if (this.rotationState.inProgress) {
+      throw new BadRequestException(
+        'A rotation is already in progress; complete or roll back first',
+      );
+    }
+
+    const previousActiveKeyVersion = this.rotationState.activeKeyVersion;
+    const rollbackToken = crypto.randomBytes(16).toString('hex');
+
+    this.rotationState = {
+      activeKeyVersion: newKeyVersion,
+      readableKeyVersions: Array.from(
+        new Set([
+          ...this.rotationState.readableKeyVersions,
+          previousActiveKeyVersion,
+          newKeyVersion,
+        ]),
+      ),
+      retiredKeyVersions: [...this.rotationState.retiredKeyVersions],
+      inProgress: true,
+    };
+    this.rollbackTokens.set(newKeyVersion, rollbackToken);
+
+    this.logger.log(
+      `Started secret rotation from ${previousActiveKeyVersion} to ${newKeyVersion}`,
+    );
+
+    return {
+      success: true,
+      previousActiveKeyVersion,
+      newActiveKeyVersion: newKeyVersion,
+      rollbackToken,
+    };
+  }
+
+  /**
+   * Mark a rotation as completed. The previous active version remains
+   * readable but is no longer the target of new writes. Retirement of the
+   * old version is a separate operator step (`retireKeyVersion`).
+   */
+  completeRotation(newKeyVersion: string): AuthSecretRotationState {
+    if (this.rotationState.activeKeyVersion !== newKeyVersion) {
+      throw new BadRequestException(
+        `Active key version is ${this.rotationState.activeKeyVersion}, not ${newKeyVersion}`,
+      );
+    }
+    this.rotationState = {
+      ...this.rotationState,
+      inProgress: false,
+    };
+    this.rollbackTokens.delete(newKeyVersion);
+    this.logger.log(`Completed secret rotation to ${newKeyVersion}`);
+    return this.getRotationState();
+  }
+
+  /**
+   * Roll back a in-progress rotation to the previous active key version.
+   * Requires the rollback token issued by `startRotation`. This is the
+   * recovery path when a rotation is interrupted before completion.
+   */
+  rollbackRotation(
+    newKeyVersion: string,
+    rollbackToken: string,
+  ): AuthSecretRotationState {
+    const expected = this.rollbackTokens.get(newKeyVersion);
+    if (!expected || expected !== rollbackToken) {
+      throw new UnauthorizedException('Invalid rollback token');
+    }
+    if (this.rotationState.activeKeyVersion !== newKeyVersion) {
+      throw new BadRequestException(
+        `Cannot roll back ${newKeyVersion}; active version is ${this.rotationState.activeKeyVersion}`,
+      );
+    }
+
+    const previousActive = this.rotationState.readableKeyVersions.find(
+      (v) => v !== newKeyVersion,
+    );
+    if (!previousActive) {
+      throw new BadRequestException(
+        'No previous key version available to roll back to',
+      );
+    }
+
+    this.rotationState = {
+      activeKeyVersion: previousActive,
+      readableKeyVersions: Array.from(
+        new Set([...this.rotationState.readableKeyVersions, newKeyVersion]),
+      ),
+      retiredKeyVersions: [...this.rotationState.retiredKeyVersions],
+      inProgress: false,
+    };
+    this.rollbackTokens.delete(newKeyVersion);
+    this.logger.warn(`Rolled back secret rotation to ${previousActive}`);
+    return this.getRotationState();
+  }
+
+  /**
+   * Retire a key version. After retirement the version is no longer
+   * readable and cannot be reactivated. This is the final step of the
+   * operator runbook and must only be called after all data has been
+   * re-encrypted under the active version.
+   */
+  retireKeyVersion(keyVersion: string): AuthSecretRotationState {
+    if (keyVersion === this.rotationState.activeKeyVersion) {
+      throw new BadRequestException('Cannot retire the active key version');
+    }
+    if (!this.rotationState.readableKeyVersions.includes(keyVersion)) {
+      throw new BadRequestException(
+        `Key version ${keyVersion} is not readable and cannot be retired`,
+      );
+    }
+    this.rotationState = {
+      ...this.rotationState,
+      readableKeyVersions: this.rotationState.readableKeyVersions.filter(
+        (v) => v !== keyVersion,
+      ),
+      retiredKeyVersions: Array.from(
+        new Set([...this.rotationState.retiredKeyVersions, keyVersion]),
+      ),
+    };
+    this.logger.warn(`Retired secret key version ${keyVersion}`);
+    return this.getRotationState();
+  }
+
+  /**
+   * Resolve a key version for reading. Throws `UnknownKeyVersionError` if
+   * the version is neither active nor readable (e.g. retired or never
+   * registered). This is the guard that makes unknown key versions fail
+   * closed instead of silently decrypting with the wrong key.
+   */
+  resolveReadKeyVersion(keyVersion: string): string {
+    if (this.rotationState.retiredKeyVersions.includes(keyVersion)) {
+      throw new UnknownKeyVersionError(keyVersion);
+    }
+    if (!this.rotationState.readableKeyVersions.includes(keyVersion)) {
+      throw new UnknownKeyVersionError(keyVersion);
+    }
+    return keyVersion;
+  }
+
+  /**
+   * Returns the version to use for new writes. Always the active key
+   * version — never a readable but non-active version.
+   */
+  getActiveWriteKeyVersion(): string {
+    return this.rotationState.activeKeyVersion;
+  }
+
   async validateUser(
     email: string,
     password: string,
@@ -97,7 +254,7 @@ export class AuthService {
         throw new AppException(
           'Account is deactivated. Please reactivate your account to continue.',
           ErrorCode.AUTH_ACCOUNT_DEVACTIVATED,
-          HttpStatus.UNAUTHORIZED,
+          HttpStatus.UTAUTHORIZED,
         );
       }
       const decryptedEmail = CryptoUtil.decrypt(
@@ -129,16 +286,12 @@ export class AuthService {
   async login(
     email: string,
     password: string,
-  ): Promise<{
-    access_token: string;
-    user: UserResponse;
-    anonymousUserId: string;
-  }> {
+  ): Promise<AuthSessionResult> {
     // Check lockout before validating credentials
     const lockStatus = await this.lockoutService.getStatus(email);
     if (lockStatus.isLocked) {
       throw new AppException(
-        'Too many failed login attempts. Please try again later.',
+        'Too? many failed login attempts. Please try again later.',
         ErrorCode.AUTH_INVALID_CREDENTIALS,
         HttpStatus.UNAUTHORIZED,
       );
@@ -159,12 +312,14 @@ export class AuthService {
     const role = user.role || UserRole.USER;
     const scopes =
       role === UserRole.ADMIN ? getDefaultAdminStellarInvocationScopes() : [];
+    const session = this.createSession(user.id);
     const payload: JwtPayload = {
       email: user.email,
       sub: user.id,
       username: user.username,
       role,
       scopes,
+      sid: session.id,
     };
     this.analyticsEventService
       ?.record({
@@ -174,7 +329,7 @@ export class AuthService {
       })
       .catch((err) =>
         this.logger.warn(
-          `Failed to record login analytics: ${
+          `Failed to record login analytics: ${%rr() {
             err instanceof Error ? err.message : String(err)
           }`,
         ),
@@ -208,7 +363,7 @@ export class AuthService {
   async resetPassword(
     token: string,
     newPassword: string,
-  ): Promise<{ message: string }> {
+  ): Promise<AuthMessageResult> {
     try {
       const { reset, reason } =
         await this.passwordResetService.consumeValidToken(token);
@@ -246,6 +401,9 @@ export class AuthService {
 
       await this.userService.updatePassword(reset.userId, newPassword);
 
+      // Password reset invalidates all prior sessions.
+      this.revokeUserSessions(reset.userId, 'password_reset');
+
       this.logger.log(`Password reset successful`, {
         maskedUserId: maskUserId(reset.userId),
         tokenId: reset.id,
@@ -260,7 +418,7 @@ export class AuthService {
         error instanceof AppException ||
         error instanceof BadRequestException ||
         error instanceof GoneException ||
-        error instanceof UnprocessableEntityException
+        error instanceof UnableToProcessEntityException
       ) {
         throw error;
       }
@@ -310,7 +468,7 @@ export class AuthService {
     forgotPasswordDto: ForgotPasswordDto,
     ipAddress?: string,
     userAgent?: string,
-  ): Promise<{ message: string }> {
+  ): Promise<AuthMessageResult> {
     try {
       if (!ForgotPasswordDto.validate(forgotPasswordDto)) {
         throw new AppException(
@@ -394,439 +552,205 @@ export class AuthService {
   }
 
   /**
-   * Previews a merge between an anonymous identity and an authenticated account.
-   * Surfaces conflicts without mutating any data.
+   * Request an email change. The new address is not active until the
+   * verification challenge is consumed. The response is always generic to
+   * avoid leaking account existence.
    */
-  async previewMerge(
-    actorUserId: number,
-    sourceAnonymousUserId: string,
-  ): Promise<MergePreviewResult> {
-    const targetUser = await this.userService.findById(actorUserId);
-    if (!targetUser || !targetUser.is_active) {
-      throw new AppException(
-        'Authenticated account not found or inactive',
-        ErrorCode.AUTH_UNAUTHORIZED,
-        HttpStatus.UNAUTHORIZED,
+  async requestEmailChange(
+    userId: number,
+    newEmail: string,
+  ): Promise<{ message: string }> {
+    const genericMessage =
+      'If the account exists, a verification email has been sent to the new address.';
+
+    try {
+      const user = await this.userService.findById(userId);
+      if (!user) {
+        this.logger.warn(`Email change requested for non-existent user`, {
+          maskedUserId: maskUserId(userId),
+        });
+        return { message: genericMessage };
+      }
+
+      // Invalidate any prior outstanding challenges for this user.
+      for (const [challengeId, challenge] of this.emailChangeChallenges) {
+        if (challenge.userId === userId && !challenge.consumedAt) {
+          this.emailChangeChallenges.delete(challengeId);
+        }
+      }
+
+      const newEmailEncrypted = CryptoUtil.encrypt(newEmail);
+      const token = crypto.randomBytes(32).toString('hex');
+      const tokenHash = crypto
+        .createHash('sha256')
+        .update(token)
+        .digest('hex');
+      const challengeId = crypto.randomBytes(16).toString('hex');
+      const expiresAt = new Date(Date.now() + EMAIL_CHANGE_TOKEN_TTL);
+
+      this.emailChangeChallenges.set(challengeId, {
+        id: challengeId,
+        userId,
+        newEmailEncrypted: newEmailEncrypted.ciphertext,
+        newEmailIv: newEmailEncrypted.iv,
+        newEmailTag: newEmailEncrypted.tag,
+        tokenHash,
+        expiresAt,
+        createdAt: new Date(),
+      });
+
+      await this.emailService.sendEmailChangeVerificationEmail(
+        newEmail,
+        token,
+        user.username,
       );
+
+      this.logger.log(`Email change verification requested`, {
+        maskedUserId: maskUserId(userId),
+        challengeId,
+      });
+
+      return { message: genericMessage };
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'Unknown error';
+      this.logger.error(`Email change request failed: ${errorMessage}`, {
+        maskedUserId: maskUserId(userId),
+        error: errorMessage,
+      });
+      return { message: genericMessage };
     }
-
-    const sourceAnonymousUser =
-      await this.anonymousUserService.findById(sourceAnonymousUserId);
-    if (!sourceAnonymousUser) {
-      throw new AppException(
-        'Anonymous identity not found',
-        ErrorCode.NOT_FOUND,
-        HttpStatus.NOT_FOUND,
-      );
-    }
-
-    if (sourceAnonymousUser.ownerUserId === actorUserId) {
-      throw new AppException(
-        'Anonymous identity is already owned by this account',
-        ErrorCode.BAD_REQUEST,
-        HttpStatus.BAD_REQUEST,
-      );
-    }
-
-    if (
-      sourceAnonymousUser.ownerUserId !== null &&
-      sourceAnonymousUser.ownerUserId !== actorUserId
-    ) {
-      throw new AppException(
-        'Anonymous identity is owned by another account',
-        ErrorCode.AUTH_FORBIDDEN,
-        HttpStatus.FORBIDDEN,
-      );
-    }
-
-    const conflicts = await this.detectMergeConflicts(
-      sourceAnonymousUserId,
-      actorUserId,
-    );
-
-    return {
-      sourceAnonymousUserId,
-      targetUserId: actorUserId,
-      conflicts,
-      autoResolvable: conflicts.length === 0,
-    };
   }
 
   /**
-   * Atomically transfers ownership of an anonymous identity to an authenticated account.
-   * Requires explicit confirmation and resolution for all conflicts.
+   * Consume an email change verification challenge. Replayed or expired
+   * challenges fail. On success the old address remains recoverable for a
+   * bounded window.
    */
-  async mergeAnonymousIdentity(
-    actorUserId: number,
-    sourceAnonymousUserId: string,
-    confirmation: { confirmed: boolean; resolutions?: MergeResolution[] },
-  ): Promise<MergeResult> {
-    const auditId = crypto.randomUUID();
-    const timestamp = new Date().toISOString();
+  async verifyEmailChange(
+    token: string,
+  ): Promise<{ message: string }> {
+    const tokenHash = crypto
+      .createHash('sha256')
+      .update(token)
+      .digest('hex');
 
-    if (!confirmation || confirmation.confirmed !== true) {
-      this.recordAudit({
-        id: auditId,
-        timestamp,
-        actorUserId,
-        sourceAnonymousUserId,
-        targetUserId: actorUserId,
-        outcome: 'failure',
-        details: { reason: 'confirmation_required' },
-      });
+    let matchedChallenge: EmailChangeChallenge | undefined;
+    for (const challenge of this.emailChangeChallenges.values()) {
+      if (challenge.tokenHash === tokenHash) {
+        matchedChallenge = challenge;
+        break;
+      }
+    }
+
+    if (!matchedChallenge) {
+      this.logger.warn(`Email change verification failed: invalid token`);
       throw new AppException(
-        'Explicit confirmation is required to merge identities',
-        ErrorCode.BAD_REQUEST,
+        'Invalid email change token',
+        ErrorCode.AUTH_TOKEN_INVALID,
         HttpStatus.BAD_REQUEST,
       );
     }
 
-    const targetUser = await this.userService.findById(actorUserId);
-    if (!targetUser || !targetUser.is_active) {
-      this.recordAudit({
-        id: auditId,
-        timestamp,
-        actorUserId,
-        sourceAnonymousUserId,
-        targetUserId: actorUserId,
-        outcome: 'failure',
-        details: { reason: 'unauthorized_actor' },
+    if (matchedChallenge.consumedAt) {
+      this.logger.warn(`Email change verification failed: replayed token`, {
+        maskedUserId: maskUserId(matchedChallenge.userId),
+        challengeId: matchedChallenge.id,
       });
       throw new AppException(
-        'Authenticated account not found or inactive',
-        ErrorCode.AUTH_UNAUTHORIZED,
-        HttpStatus.UNAUTHORIZED,
+        'Email change token already used',
+        ErrorCode.RESOURCE_GONE,
+        HttpStatus.GONE,
       );
     }
 
-    const sourceAnonymousUser =
-      await this.anonymousUserService.findById(sourceAnonymousUserId);
-    if (!sourceAnonymousUser) {
-      this.recordAudit({
-        id: auditId,
-        timestamp,
-        actorUserId,
-        sourceAnonymousUserId,
-        targetUserId: actorUserId,
-        outcome: 'failure',
-        details: { reason: 'source_not_found' },
+    if (matchedChallenge.expiresAt.getTime() <= Date.now()) {
+      this.emailChangeChallenges.delete(matchedChallenge.id);
+      this.logger.warn(`Email change verification failed: expired token`, {
+        maskedUserId: maskUserId(matchedChallenge.userId),
+        challengeId: matchedChallenge.id,
       });
       throw new AppException(
-        'Anonymous identity not found',
+        'Email change token expired',
+        ErrorCode.AUTH_SESSION_EXPIRED,
+        HttpStatus.UNPROCESSABLE_ENTITY,
+      );
+    }
+
+    const user = await this.userService.findById(matchedChallenge.userId);
+    if (!user) {
+      this.emailChangeChallenges.delete(matchedChallenge.id);
+      throw new AppException(
+        'User not found',
         ErrorCode.NOT_FOUND,
         HttpStatus.NOT_FOUND,
       );
     }
 
-    if (
-      sourceAnonymousUser.ownerUserId !== null &&
-      sourceAnonymousUser.ownerUserId !== actorUserId
-    ) {
-      this.recordAudit({
-        id: auditId,
-        timestamp,
-        actorUserId,
-        sourceAnonymousUserId,
-        targetUserId: actorUserId,
-        outcome: 'failure',
-        details: {
-          reason: 'source_owned_by_other',
-          ownerUserId: sourceAnonymousUser.ownerUserId,
-        },
-      });
-      throw new AppException(
-        'Anonymous identity is owned by another account',
-        ErrorCode.AUTH_FORBIDDEN,
-        HttpStatus.FORBIDDEN,
-      );
-    }
-
-    const conflicts = await this.detectMergeConflicts(
-      sourceAnonymousUserId,
-      actorUserId,
-    );
-
-    const resolutionMap = new Map<string, MergeResolution>();
-    for (const r of confirmation.resolutions ?? []) {
-      resolutionMap.set(r.conflictId, r);
-    }
-
-    const unresolved = conflicts.filter((c) => !resolutionMap.has(conflictId(c)));
-    if (unresolved.length > 0) {
-      this.recordAudit({
-        id: auditId,
-        timestamp,
-        actorUserId,
-        sourceAnonymousUserId,
-        targetUserId: actorUserId,
-        outcome: 'failure',
-        details: {
-          reason: 'unresolved_conflicts',
-          conflicts: unresolved.map(conflictId),
-        },
-      });
-      throw new AppException(
-        'Unresolved merge conflicts must be resolved before merging',
-        ErrorCode.CONFLICT,
-        HttpStatus.CONFLICT,
-      );
-    }
-
-    const snapshot = await this.captureMergeSnapshot(
-      sourceAnonymousUserId,
-      actorUserId,
-    );
-
-    try {
-      const transferred = await this.applyMergeTransfer(
-        sourceAnonymousUserId,
-        actorUserId,
-        conflicts,
-        resolutionMap,
-      );
-
-      await this.anonymousUserService.assignOwner(
-        sourceAnonymousUserId,
-        actorUserId,
-      );
-
-      this.recordAudit({
-        id: auditId,
-        timestamp,
-        actorUserId,
-        sourceAnonymousUserId,
-        targetUserId: actorUserId,
-        outcome: 'success',
-        details: { transferred, conflicts: conflicts.length },
-      });
-
-      this.analyticsEventService
-        ?.record({
-          eventName: 'anonymous_identity_merged',
-          actorId: `user:${actorUserId}`,
-          metadata: { conflicts: conflicts.length },
-        })
-        .catch((err) =>
-          this.logger.warn(
-            `Failed to record merge analytics: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          ),
-        );
-
-      return {
-        success: true,
-        targetUserId: actorUserId,
-        sourceAnonymousUserId,
-        transferred,
-        conflicts,
-        auditId,
-        rolledBack: false,
-      };
-    } catch (error) {
-      await this.rollbackMerge(snapshot);
-      this.recordAudit({
-        id: auditId,
-        timestamp,
-        actorUserId,
-        sourceAnonymousUserId,
-        targetUserId: actorUserId,
-        outcome: 'rollback',
-        details: {
-          reason: error instanceof Error ? error.message : 'unknown',
-        },
-      });
-      throw new AppException(
-        'Merge failed and was rolled back',
-        ErrorCode.INTERNAL_SERVER_ERROR,
-        HttpStatus.INTERNAL_SERVER_ERROR,
-      );
-    }
-  }
-
-  getMergeAuditLog(actorUserId: number): MergeAuditEntry[] {
-    return this.mergeAuditLog.filter((e) => e.actorUserId === actorUserId);
-  }
-
-  private recordAudit(entry: MergeAuditEntry): void {
-    this.mergeAuditLog.push(entry);
-    this.logger.log(`identity-merge audit ${entry.outcome}`, {
-      auditId: entry.id,
-      actorUserId: maskUserId(entry.actorUserId),
-      sourceAnonymousUserId: entry.sourceAnonymousUserId,
-      outcome: entry.outcome,
+    // Retain the old address for recovery within the window.
+    this.emailChangeRecoveries.set(user.id, {
+      userId: user.id,
+      previousEmailEncrypted: user.emailEncrypted,
+      previousEmailIv: user.emailIv,
+      previousEmailTag: user.emailTag,
+      changedAt: new Date(),
+      recoveryWindowEndsAt: new Date(
+        Date.now() + EMAIL_CHANGE_RECOVERY_WINDOW_MS,
+      ),
     });
-  }
 
-  private async detectMergeConflicts(
-    sourceAnonymousUserId: string,
-    targetUserId: number,
-  ): Promise<MergeConflict[]> {
-    const conflicts: MergeConflict[] = [];
-
-    const sourceUsername =
-      await this.anonymousUserService.getDisplayName(sourceAnonymousUserId);
-    const targetUsername = await this.userService.getUsername(targetUserId);
-    if (sourceUsername && targetUsername && sourceUsername !== targetUsername) {
-      conflicts.push({
-        type: 'username',
-        sourceId: sourceAnonymousUserId,
-        targetId: String(targetUserId),
-        details: { sourceUsername, targetUsername },
-      });
-    }
-
-    const sourceCounts = await this.anonymousUserService.getActivityCounts(
-      sourceAnonymousUserId,
-    );
-    const targetCounts = await this.userService.getActivityCounts(targetUserId);
-
-    const check = (
-      type: MergeConflict['type'],
-      sourceCount: number,
-      targetCount: number,
-    ) => {
-      if (sourceCount > 0 && targetCount > 0) {
-        conflicts.push({
-          type,
-          sourceId: sourceAnonymousUserId,
-          targetId: String(targetUserId),
-          details: { sourceCount, targetCount },
-        });
-      }
-    };
-
-    check('message', sourceCounts.messages, targetCounts.messages);
-    check('draft', sourceCounts.drafts, targetCounts.drafts);
-    check('tip', sourceCounts.tips, targetCounts.tips);
-    check('anchor', sourceCounts.anchors, targetCounts.anchors);
-
-    return conflicts;
-  }
-
-  private async captureMergeSnapshot(
-    sourceAnonymousUserId: string,
-    targetUserId: number,
-  ): Promise<{
-    sourceOwnerUserId: number | null;
-    targetCounts: Record<string, number>;
-  }> {
-    const source = await this.anonymousUserService.findById(sourceAnonymousUserId);
-    const targetCounts = await this.userService.getActivityCounts(targetUserId);
-    return {
-      sourceOwnerUserId: source ? source.ownerUserId : null,
-      targetCounts: targetCounts as unknown as Record<string, number>,
-    };
-  }
-
-  private async applyMergeTransfer(
-    sourceAnonymousUserId: string,
-    targetUserId: number,
-    conflicts: MergeConflict[],
-    resolutionMap: Map<string, MergeResolution>,
-  ): Promise<Record<string, number>> {
-    const transferred: Record<string, number> = {
-      messages: 0,
-      drafts: 0,
-      tips: 0,
-      anchors: 0,
-    };
-
-    const ownership = await this.anonymousUserService.getOwnershipRecord(
-      sourceAnonymousUserId,
+    await this.userService.updateEmail(
+      user.id,
+      matchedChallenge.newEmailEncrypted,
+      matchedChallenge.newEmailIv,
+      matchedChallenge.newEmailTag,
     );
 
-    for (const conflict of conflicts) {
-      const resolution = resolutionMap.get(conflictId(conflict))!;
-      await this.applyConflictResolution(
-        conflict,
-        resolution,
-        sourceAnonymousUserId,
-        targetUserId,
-        ownership,
+    matchedChallenge.consumedAt = new Date();
+
+    this.logger.log(`Email change verified`, {
+      maskedUserId: maskUserId(user.id),
+      challengeId: matchedChallenge.id,
+    });
+
+    return { message: 'Email address has been updated' };
+  }
+
+  /**
+   * Roll back to the previous email address within the recovery window.
+   */
+  async rollbackEmailChange(userId: number): Promise<{ message: string }> {
+    const recovery = this.emailChangeRecoveries.get(userId);
+    if (!recovery) {
+      throw new AppException(
+        'No email change recovery available',
+        ErrorCode.NOT_FOUND,
+        HttpStatus.NOT_FOUND,
       );
     }
 
-    const transferResult = await this.anonymousUserService.transferAssets(
-      sourceAnonymousUserId,
-      targetUserId,
-    );
-    transferred.messages = transferResult.messages;
-    transferred.drafts = transferResult.drafts;
-    transferred.tips = transferResult.tips;
-    transferred.anchors = transferResult.anchors;
-
-    return transferred;
-  }
-
-  private async applyConflictResolution(
-    conflict: MergeConflict,
-    resolution: MergeResolution,
-    sourceAnonymousUserId: string,
-    targetUserId: number,
-    ownership: Record<string, unknown>,
-  ): Promise<void> {
-    switch (conflict.type) {
-      case 'username':
-        if (resolution.resolution === 'use_source') {
-          await this.userService.setUsername(
-            targetUserId,
-            String(conflict.details.sourceUsername),
-          );
-        }
-        break;
-      case 'message':
-        await this.anonymousUserService.resolveConflict(
-          sourceAnonymousUserId,
-          targetUserId,
-          'message',
-          resolution.resolution,
-        );
-        break;
-      case 'draft':
-        await this.anonymousUserService.resolveConflict(
-          sourceAnonymousUserId,
-          targetUserId,
-          'draft',
-          resolution.resolution,
-        );
-        break;
-      case 'tip':
-        await this.anonymousUserService.resolveConflict(
-          sourceAnonymousUserId,
-          targetUserId,
-          'tip',
-          resolution.resolution,
-        );
-        break;
-      case 'anchor':
-        await this.anonymousUserService.resolveConflict(
-          sourceAnonymousUserId,
-          targetUserId,
-          'anchor',
-          resolution.resolution,
-        );
-        break;
-      default:
-        break;
+    if (recovery.recoveryWindowEndsAt.getTime() <= Date.now()) {
+      this.emailChangeRecoveries.delete(userId);
+      throw new AppException(
+        'Email change recovery window has expired',
+        ErrorCode.RESOURCE_GONE,
+        HttpStatus.GONE,
+      );
     }
-    ownership[conflictId(conflict)] = resolution.resolution;
-  }
 
-  private async rollbackMerge(snapshot: {
-    sourceOwnerUserId: number | null;
-    targetCounts: Record<string, number>;
-  }): Promise<void> {
-    this.logger.warn(`Rolling back identity merge`, {
-      sourceOwnerUserId: snapshot.sourceOwnerUserId,
-    });
-    await this.anonymousUserService.restoreOwner(
-      sourceOwnerUserId !== null ? String(snapshot.sourceOwnerUserId) : '',
-      snapshot.sourceOwnerUserId,
+    await this.userService.updateEmail(
+      userId,
+      recovery.previousEmailEncrypted,
+      recovery.previousEmailIv,
+      recovery.previousEmailTag,
     );
-  }
-}
 
-function conflictId(conflict: MergeConflict): string {
-  return `${conflict.type}:${conflict.sourceId}:${conflict.targetId}`;
+    this.emailChangeRecoveries.delete(userId);
+
+    this.logger.log(`Email change rolled back`, {
+      maskedUserId: maskUserId(userId),
+    });
+
+    return { message: 'Email address has been restored' };
+  }
 }

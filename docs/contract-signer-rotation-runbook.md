@@ -6,7 +6,7 @@
 
 ---
 
-## Part 1 — Routine Signer Rotation
+## Part 1 — routine Signer Rotation
 
 Use this flow for **planned** key rotations (scheduled maintenance, key age policy, personnel change).
 
@@ -38,7 +38,7 @@ stellar contract invoke \
   --id $CONTRACT_ID \
   --source-account $CURRENT_ADMIN_KEY \
   --network mainnet \
-  -- pause --reason "Planned admin key rotation — maintenance window"
+  - pause --reason "Planned admin key rotation — maintenance window"
 ```
 
 Verify the pause:
@@ -47,7 +47,7 @@ Verify the pause:
 stellar contract invoke \
   --id $CONTRACT_ID \
   --network mainnet \
-  -- is_paused
+  - is_paused
 # Expected: true
 ```
 
@@ -60,7 +60,7 @@ stellar contract invoke \
   --id $CONTRACT_ID \
   --source-account $CURRENT_ADMIN_KEY \
   --network mainnet \
-  -- propose_admin_transfer --new_admin $NEW_ADMIN_PUBLIC_KEY
+  - propose_admin_transfer --new_admin $NEW_ADMIN_PUBLIC_KEY
 ```
 
 Note the `transfer_id` and the `earliest_executable_at` timestamp returned.
@@ -73,7 +73,7 @@ The timelock period is defined in the contract configuration. Do not proceed unt
 stellar contract invoke \
   --id $CONTRACT_ID \
   --network mainnet \
-  -- pending_admin_transfer
+  - pending_admin_transfer
 # Confirm new_admin and earliest_executable_at
 ```
 
@@ -86,7 +86,7 @@ stellar contract invoke \
   --id $CONTRACT_ID \
   --source-account $QUORUM_SIGNER_KEY \
   --network mainnet \
-  -- execute_admin_transfer --transfer_id $TRANSFER_ID
+  - execute_admin_transfer --transfer_id $TRANSFER_ID
 ```
 
 ### Step 6 — Verify and unpause
@@ -96,7 +96,7 @@ stellar contract invoke \
 stellar contract invoke \
   --id $CONTRACT_ID \
   --network mainnet \
-  -- admin
+  - admin
 # Expected: $NEW_ADMIN_PUBLIC_KEY
 
 # Unpause the contract
@@ -104,10 +104,10 @@ stellar contract invoke \
   --id $CONTRACT_ID \
   --source-account $NEW_ADMIN_KEY \
   --network mainnet \
-  -- unpause --reason "Key rotation complete"
+  - unpause --reason "Key rotation complete"
 
 # Verify
-stellar contract invoke --id $CONTRACT_ID --network mainnet -- is_paused
+stellar contract invoke --id $CONTRACT_ID --network mainnet - is_paused
 # Expected: false
 ```
 
@@ -145,7 +145,7 @@ stellar contract invoke \
   --id $CONTRACT_ID \
   --source-account $QUORUM_SIGNER_KEY \
   --network mainnet \
-  -- emergency_pause --reason "Suspected key compromise — P0 incident"
+  - emergency_pause --reason "Suspected key compromise — P0 incident"
 ```
 
 If the contract is already paused (attacker triggered it), verify pause state and proceed.
@@ -177,7 +177,7 @@ stellar contract invoke \
   --id $CONTRACT_ID \
   --source-account $NEW_ADMIN_KEY \
   --network mainnet \
-  -- unpause --reason "Break-glass rotation complete — incident $INCIDENT_ID"
+  - unpause --reason "Break-glass rotation complete — incident $INCIDENT_ID"
 ```
 
 ### Step 6 — Post-incident communication and verification
@@ -190,13 +190,110 @@ stellar contract invoke \
 
 ---
 
+## Part 3 — Application Secret Key Versioning and Rotation (Zero-Downtime)
+
+This part covers **off-chain application secrets** (encryption keys, signing secrets) used by the backend to protect data at rest and sign tokens. Rotation must preserve access to data encrypted with previous key versions.
+
+### Key versioning model
+
+Every secret is stored as a **versioned entry** in the secret manager:
+
+- Key name: `<purpose>/v<N>` (e.g. `data-encryption/v3`, `token-signing/v7`)
+- Active pointer: `<purpose>/active` → current version name
+- Previous versions remain readable until explicitly retired.
+
+Ciphertext and signed tokens must embed the key version so the reader can select the correct key:
+
+- Encrypted blobs: prefix `enc:v<N>:<payload>`
+- Signed tokens: `v<N>.<base64url(payload)>.<base64url(sig)>`
+
+The active version is used for **new writes**. Reads accept the active version and any version still listed in the rotation manifest.
+
+### Rotation manifest
+
+Maintain a committed manifest at `config/secret-rotation.json`:
+
+```json
+{
+  "data-encryption": {
+    "active": "v3",
+    "readable": ["v3", "v2"],
+    "retired": ["v1"]
+  },
+  "token-signing": {
+    "active": "v7",
+    "readable": ["v7", "v6"],
+    "retired": []
+  }
+}
+```
+
+Rules:
+
+- New writes always use `active`.
+- Readers accept `active` and every version in `readable`.
+- A version moves to `retired` only after a backfill has re-encrypted/re-signed all data and a grace period has elapsed.
+- Unknown versions must fail closed (see Failure handling).
+
+### Dual-read / single-write migration
+
+1. **Prepare** — add the new key as `<purpose>/v<N+1>` in the secret manager. Do not change `active` yet.
+2. **Enable dual read** — add the new version to `readable` in the manifest and deploy. At this point readers can handle both old and new ciphertext, but writes still emit the old version.
+3. **Flip writes** — set `active` to the new version and deploy. New writes now emit `<purpose>/v<N+1>`; readers still accept the old version.
+4. **Backfill** — re-encrypt records or re-sign tokens in place using a batched migration job. The job must be idompotent and resumable.
+5. **Retire** — once the backfill reports zero remaining objects on the old version and the grace period has elapsed, move the old version to `retired` and remove it from the vault.
+
+### Rollback
+
+At any point before step 5 the rotation can be rolled back without data loss:
+
+1. Revert `active` to the previous version in the manifest and deploy.
+2. Keep the new version in `readable` so any data already written with it remains readable.
+3. Re-run the backfill only after the new key is re-activated.
+
+If a rotation is interrupted mid-flip (e.g. deploy fails after manifest update), the system must still read both versions: `runbook/secret-rotation-recovery.md` describes the recovery procedure.
+
+### Operator runbook — application secret rotation
+
+1. **Pre-flight** — confirm the new key exists in the vault and the manifest is valid:
+
+```bash
+npm run secret-scan
+npm run audit:ci
+```
+
+2. **Add new version** — update the manifest `readable` list and deploy. Verify with `npm run backend:test`.
+3. **Flip active** — update `active` and deploy. Monitor decryption/signature errors for at least one reporting interval.
+4. **Backfill** — run the migration job in batches. Record completion in the audit trail.
+5. **Retire** — move the old version to `retired`, remove from the vault, and re-run `npm run secret-scan && npm run audit:ci && npm run backend:test`.
+
+### Failure handling
+
+- **Unknown key version** — decryption or signature verification must return a typed error (e.g. `UNKNOWN_KEY_VERSION`) and must not fall back to the active key. This prevents silent data corruption.
+- **Missing key** — if the vault lookup fails, fail closed and alert; do not return plaintext or a default key.
+- **Interrupted rotation** — if the manifest and deployed code disagree, the reader must honour the union of both manifests until reconciled.
+- **Rollback** — reverting `active` must not invalidate data already written with the new version.
+
+### Tests required
+
+- New writes emit the active version.
+- Reads succeed for all versions in `readable`.
+- Reads fail with `UNKNOWN_KEY_VERSION` for versions not in `readable` or `retired`.
+- Rotation interrupted between manifest update and deploy still reads both versions.
+- Rollback of `active` keeps new-version data readable.
+- Authorization: only operators with the `secrets:rotate` scope can mutate the manifest.
+- Privacy: key material must never appear in logs, traces, or error messages.
+
+---
+
 ## Drills
 
 Run a tabletop drill at least once per quarter:
 
 1. Simulate a planned rotation using the testnet contract.
 2. Simulate a compromised-key scenario: pause the testnet contract, perform break-glass rotation, unpause.
-3. Record drill date, participants, and any gaps found in this runbook.
+3. Simulate an application secret rotation including an interrupted flip and rollback.
+4. Record drill date, participants, and any gaps found in this runbook.
 
 ---
 

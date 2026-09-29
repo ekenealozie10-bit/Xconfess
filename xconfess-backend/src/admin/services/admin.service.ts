@@ -22,6 +22,7 @@ import { Tip } from "../../tipping/entities/tip.entity";
 import { AuditLogService } from "../../audit-log/audit-log.service";
 import { JobManagementService } from "../../notifications/services/job-management.service";
 import { LockoutService } from "../../auth/lockout.service";
+import { SessionService } from "../../auth/session.service";
 import {
   CursorPaginatedResponseDto,
   PAGINATION,
@@ -81,6 +82,7 @@ export class AdminService {
     private readonly auditLogService: AuditLogService,
     private readonly jobManagementService: JobManagementService,
     private readonly lockoutService: LockoutService,
+    private readonly sessionService: SessionService,
   ) {}
 
   private get aesKey(): string {
@@ -107,7 +109,7 @@ export class AdminService {
       .leftJoinAndSelect("report.confession", "confession")
       .leftJoinAndSelect("report.reporter", "reporter")
       .leftJoinAndSelect("report.resolver", "resolver")
-      .orderBy("report.createdAt", "DESC")
+      .orderBy: "report.createdAt", "DESC")
       .take(limit)
       .skip(offset);
 
@@ -437,7 +439,7 @@ export class AdminService {
         AuditActionType.CONFESSION_UNHIDDEN,
         "confession",
         id,
-        null,
+        {},
         null,
         request,
         manager,
@@ -447,681 +449,98 @@ export class AdminService {
     });
   }
 
-  // Users
-
-  async unlockAccount(email: string): Promise<void> {
-    await this.lockoutService.clearLockout(email);
-    this.logger.log(`Admin unlocked account: ${email}`);
-  }
-
-  async banUser(
+  // Session rotation / revocation (admin-safe)
+  async revokeUserSessions(
     userId: number,
     adminId: number,
-    reason: string | null,
+    reason: string,
     request?: Request,
-    durationDays: number | null = null,
-  ): Promise<User> {
-    return this.runInModerationTransaction(async (manager) => {
-      const userRepo = manager.getRepository(User);
-      const user = await userRepo.findOne({ where: { id: userId } });
-
-      if (!user) {
-        throw new NotFoundException("User not found");
-      }
-
-      if (!user.is_active) {
-        throw new BadRequestException("User is already banned");
-      }
-
-      user.is_active = false;
-      const saved = await userRepo.save(user);
-      const bannedUntil = durationDays
-        ? new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000)
-        : null;
-
-      await this.moderationService.logAction(
-        adminId,
-        AuditActionType.USER_BANNED,
-        "user",
-        userId.toString(),
-        {
-          reason,
-          durationDays,
-          bannedUntil: bannedUntil?.toISOString() ?? null,
-        },
-        reason,
-        request,
-        manager,
-      );
-
-      return saved;
-    });
-  }
-
-  async updateUserRole(
-    userId: number,
-    role: UserRole,
-    adminId: number,
-    reason?: string,
-    request?: Request,
-  ): Promise<User> {
-    if (!Object.values(UserRole).includes(role)) {
-      throw new BadRequestException("Invalid role");
+  ): Promise<{ revoked: number }> {
+    if (!reason || reason.trim().length === 0) {
+      throw new BadRequestException("Reason is required for session revocation");
     }
 
-    if (userId === adminId) {
-      await this.logSecurityEvent(adminId, "ROLE_SELF_ESCALATION_BLOCKED", {
-        targetUserId: userId,
-        attemptedRole: role,
-        reason: reason || null,
-      }, request);
-      throw new ForbiddenException("Self-escalation is not permitted");
-    }
-
-    return this.runInModerationTransaction(async (manager) => {
-      const userRepo = manager.getRepository(User);
-      const user = await userRepo.findOne({ where: { id: userId } });
-
-      if (!user) {
-        throw new NotFoundException("User not found");
-      }
-
-      const previousRole = user.role || UserRole.USER;
-      if (previousRole === role) {
-        return user;
-      }
-
-      if (role === UserRole.ADMIN && previousRole !== UserRole.ADMIN) {
-        if (!user.is_active) {
-          throw new BadRequestException("Cannot grant admin to a banned user");
-        }
-      }
-
-      user.role = role;
-      const saved = await userRepo.save(user);
-      const action =
-        role === UserRole.ADMIN
-          ? AuditActionType.USER_ADMIN_GRANTED
-          : previousRole === UserRole.ADMIN
-            ? AuditActionType.USER_ADMIN_REVOKED
-            : AuditActionType.MODERATION_OVERRIDE;
-
-      await this.moderationService.logAction(
-        adminId,
-        action,
-        "user",
-        userId.toString(),
-        {
-          previousRole,
-          newRole: role,
-          targetUserId: userId,
-          actorId: adminId,
-          reason: reason || null,
-          requestId: (request as any)?.requestId || null,
-        },
-        reason || `Role changed from ${previousRole} to ${role}`,
-        request,
-        manager,
-      );
-
-      return saved;
-    });
-  }
-
-  private async logSecurityEvent(
-    adminId: number,
-    eventType: string,
-    metadata: Record<string, any>,
-    request?: Request,
-  ): Promise<void> {
-    try {
-      await this.moderationService.logAction(
-        adminId,
-        AuditActionType.MODERATION_ESCALATION,
-        "user",
-        metadata.targetUserId?.toString() || null,
-        {
-          eventType,
-          ...metadata,
-          requestId: (request as any)?.requestId || null,
-          ipAddress: request?.ip || null,
-        },
-        `Security event: ${eventType}`,
-        request,
-      );
-    } catch {
-      this.logger.warn(`Failed to log security event: ${eventType}`);
-    }
-  }
-
-  async unbanUser(
-    userId: number,
-    adminId: number,
-    request?: Request,
-  ): Promise<User> {
-    return this.runInModerationTransaction(async (manager) => {
-      const userRepo = manager.getRepository(User);
-      const user = await userRepo.findOne({ where: { id: userId } });
-
-      if (!user) {
-        throw new NotFoundException("User not found");
-      }
-
-      if (user.is_active) {
-        throw new BadRequestException("User is not banned");
-      }
-
-      user.is_active = true;
-      const saved = await userRepo.save(user);
-
-      await this.moderationService.logAction(
-        adminId,
-        AuditActionType.USER_UNBANNED,
-        "user",
-        userId.toString(),
-        null,
-        null,
-        request,
-        manager,
-      );
-
-      return saved;
-    });
-  }
-
-  async searchUsers(
-    query: string,
-    limit = 50,
-    offset = 0,
-    sortBy: UserSortField = "createdAt",
-    sortOrder: SortOrder = "DESC",
-  ): Promise<[User[], number]> {
-    const safeLimit = Math.min(Math.max(limit, 1), 100);
-    const safeOffset = Math.max(offset, 0);
-    const sortColumns: Record<UserSortField, string> = {
-      createdAt: "user.createdAt",
-      username: "user.username",
-      role: "user.role",
-      status: "user.is_active",
-    };
-    const sortColumn = sortColumns[sortBy] ?? sortColumns.createdAt;
-    const direction = sortOrder === "ASC" ? "ASC" : "DESC";
-    const qb = this.userRepository
-      .createQueryBuilder("user")
-      .orderBy(sortColumn, direction)
-      .take(safeLimit)
-      .skip(safeOffset);
-
-    const trimmed = query.trim();
-    if (trimmed) {
-      qb.where("user.username ILIKE :query", {
-        query: `%${trimmed}%`,
-      }).orWhere("user.emailHash = :hash", {
-        hash: trimmed,
-      });
-    }
-
-    return qb.getManyAndCount();
-  }
-
-  async getUserHistory(userId: number) {
-    const user = await this.userRepository.findOne({
-      where: { id: userId },
-      relations: [],
-    });
-
+    const user = await this.userRepository.findOne({ where: { id: userId } });
     if (!user) {
       throw new NotFoundException("User not found");
     }
 
-    // Get reports created by this user
-    const reports = await this.reportRepository.find({
-      where: { reporterId: userId },
-      relations: ["confession"],
-      order: { createdAt: "DESC" },
-      take: 100,
-    });
-    for (const r of reports) {
-      if (r.confession?.message) {
-        r.confession.message = this.safeDecryptConfessionMessage(
-          r.confession.message,
-        );
-      }
-    }
-
-    // Confessions are linked to AnonymousUser. We map User -> AnonymousUser sessions.
-    const links = await this.userAnonRepository.find({
-      where: { userId },
-      order: { createdAt: "DESC" },
-      take: 200,
+    const revoked = await this.sessionService.revokeAllForUser(userId, {
+      reason: "admin_revocation",
+      adminId,
     });
 
-    const anonIds = Array.from(new Set(links.map((l) => l.anonymousUserId)));
-    const confessions = anonIds.length
-      ? await this.confessionRepository
-          .createQueryBuilder("confession")
-          .leftJoin("confession.anonymousUser", "anon")
-          .where("anon.id IN (:...anonIds)", { anonIds })
-          .orderBy("confession.created_at", "DESC")
-          .take(200)
-          .getMany()
-      : [];
-
-    // Decrypt confession messages for admin visibility
-    for (const conf of confessions) {
-      if (conf.message) {
-        conf.message = this.safeDecryptConfessionMessage(conf.message);
-      }
-    }
-
-    let reportsReceived = 0;
-    if (anonIds.length) {
-      try {
-        reportsReceived = await this.reportRepository
-          .createQueryBuilder("report")
-          .leftJoin("report.confession", "confession")
-          .leftJoin("confession.anonymousUser", "anon")
-          .where("anon.id IN (:...anonIds)", { anonIds })
-          .getCount();
-      } catch (error) {
-        this.logger.warn(
-          `Failed to count reports received for user ${userId}: ${
-            error instanceof Error ? error.message : "unknown"
-          }`,
-        );
-      }
-    }
-
-    const activityTimeline = [
-      ...confessions.slice(0, 20).map((confession: any) => ({
-        id: confession.id,
-        type: "confession",
-        label: "Published confession",
-        createdAt: confession.created_at || confession.createdAt,
-        summary: confession.message,
-      })),
-      ...reports.slice(0, 20).map((report: any) => ({
-        id: report.id,
-        type: "report",
-        label: "Submitted report",
-        createdAt: report.createdAt,
-        summary: report.reason || report.type,
-      })),
-    ]
-      .filter((entry) => entry.createdAt)
-      .sort(
-        (a, b) =>
-          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-      )
-      .slice(0, 30);
-
-    return {
-      user: {
-        id: user.id,
-        username: user.username,
-        role: user.role || UserRole.USER,
-        isAdmin: user.role === UserRole.ADMIN,
-        is_active: user.is_active,
-        createdAt: user.createdAt,
-        updatedAt: user.updatedAt,
+    await this.moderationService.logAction(
+      adminId,
+      AuditActionType.USER_SESSIONS_REVOKED,
+      "user",
+      String(userId),
+      {
+        reason,
+        revokedCount: revoked,
       },
-      summary: {
-        confessionCount: confessions.length,
-        reportsFiled: reports.length,
-        reportsReceived,
-      },
-      confessions,
-      reports,
-      activityTimeline,
-      note: anonIds.length
-        ? "Confessions derived from user session mappings (user_anonymous_users)"
-        : "No anonymous session mappings found for this user yet",
-    };
-  }
-
-  // Operator anchor & tip lookup (Issue #778)
-  async lookupAnchorAndTip(params: {
-    txHash?: string;
-    confessionId?: string;
-  }): Promise<{
-    anchor: {
-      confessionId: string | null;
-      stellarTxHash: string | null;
-      stellarHash: string | null;
-      isAnchored: boolean;
-      anchoredAt: Date | null;
-    } | null;
-    tips: {
-      id: string;
-      txId: string;
-      amount: number;
-      senderAddress: string | null;
-      verificationStatus: string;
-      verifiedAt: Date | null;
-      createdAt: Date;
-    }[];
-  }> {
-    const { txHash, confessionId } = params;
-
-    if (!txHash && !confessionId) {
-      throw new BadRequestException(
-        "At least one of txHash or confessionId is required",
-      );
-    }
-
-    let confession: AnonymousConfession | null = null;
-    let tips: Tip[] = [];
-
-    if (txHash) {
-      // Look up confession by stellar tx hash
-      confession = await this.confessionRepository.findOne({
-        where: { stellarTxHash: txHash },
-        select: [
-          "id",
-          "stellarTxHash",
-          "stellarHash",
-          "isAnchored",
-          "anchoredAt",
-        ] as any,
-      });
-
-      // Also look for a tip by tx ID
-      const tip = await this.tipRepository.findOne({
-        where: { txId: txHash },
-      });
-      if (tip) tips = [tip];
-    }
-
-    if (confessionId) {
-      if (!confession) {
-        confession = await this.confessionRepository.findOne({
-          where: { id: confessionId },
-          select: [
-            "id",
-            "stellarTxHash",
-            "stellarHash",
-            "isAnchored",
-            "anchoredAt",
-          ] as any,
-        });
-      }
-
-      // Fetch all tips for this confession
-      if (tips.length === 0) {
-        tips = await this.tipRepository.find({
-          where: { confessionId },
-          order: { createdAt: "DESC" },
-        });
-      }
-    }
-
-    return {
-      anchor: confession
-        ? {
-            confessionId: confession.id,
-            stellarTxHash: confession.stellarTxHash ?? null,
-            stellarHash: confession.stellarHash ?? null,
-            isAnchored: confession.isAnchored ?? false,
-            anchoredAt: confession.anchoredAt ?? null,
-          }
-        : null,
-      tips: tips.map((t) => ({
-        id: t.id,
-        txId: t.txId,
-        amount: Number(t.amount),
-        senderAddress: t.senderAddress,
-        verificationStatus: t.verificationStatus,
-        verifiedAt: t.verifiedAt,
-        createdAt: t.createdAt,
-      })),
-    };
-  }
-
-  async getReportsCursor(
-    status?: ReportStatus,
-    type?: ReportType,
-    startDate?: Date,
-    endDate?: Date,
-    limit = 20,
-    cursor?: string,
-  ): Promise<CursorPaginatedResponseDto<Report>> {
-    const parsedCursor = decodeCursor<{ id: string; createdAt: string }>(
-      cursor,
+      reason,
+      request,
     );
-    const take = Math.min(limit + 1, PAGINATION.MAX_LIMIT);
 
-    const query = this.reportRepository
-      .createQueryBuilder("report")
-      .leftJoinAndSelect("report.confession", "confession")
-      .leftJoinAndSelect("report.reporter", "reporter")
-      .leftJoinAndSelect("report.resolver", "resolver")
-      .orderBy("report.createdAt", "DESC")
-      .addOrderBy("report.id", "DESC")
-      .take(take);
-
-    if (parsedCursor) {
-      query.andWhere(
-        "(report.createdAt < :cursorDate OR (report.createdAt = :cursorDate AND report.id < :cursorId))",
-        {
-          cursorDate: new Date(parsedCursor.createdAt),
-          cursorId: parsedCursor.id,
-        },
-      );
-    }
-
-    if (status) {
-      query.andWhere("report.status = :status", { status });
-    }
-    if (type) {
-      query.andWhere("report.type = :type", { type });
-    }
-    if (startDate) {
-      query.andWhere("report.createdAt >= :startDate", { startDate });
-    }
-    if (endDate) {
-      query.andWhere("report.createdAt <= :endDate", { endDate });
-    }
-
-    const reports = await query.getMany();
-    const hasMore = reports.length > limit;
-    if (hasMore) reports.pop();
-
-    const mapped = reports.map((r) => {
-      if (r.confession?.message) {
-        r.confession.message = this.safeDecryptConfessionMessage(
-          r.confession.message,
-        );
-      }
-      return r;
-    });
-
-    const nextCursor =
-      hasMore && reports.length > 0
-        ? encodeCursor({
-            id: reports[reports.length - 1].id,
-            createdAt: reports[reports.length - 1].createdAt.toISOString(),
-          })
-        : null;
-
-    return new CursorPaginatedResponseDto(mapped, nextCursor, hasMore, limit);
+    return { revoked };
   }
 
-  async searchUsersCursor(
-    query: string,
-    limit = 20,
-    cursor?: string,
-  ): Promise<CursorPaginatedResponseDto<User>> {
-    const parsedCursor = decodeCursor<{ id: number; createdAt: string }>(
-      cursor,
+  async rotateUserSessions(
+    userId: number,
+    adminId: number,
+    reason: string,
+    request?: Request,
+  ): Promise<{ rotated: number }> {
+    if (!reason || reason.trim().length === 0) {
+      throw new BadRequestException("Reason is required for session rotation");
+    }
+
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException("User not found");
+    }
+
+    const rotated = await this.sessionService.rotateAllForUser(userId, {
+      reason: "admin_rotation",
+      adminId,
+    });
+
+    await this.moderationService.logAction(
+      adminId,
+      AuditActionType.USER_SESSIONS_ROTATED,
+      "user",
+      String(userId),
+      {
+        reason,
+        rotatedCount: rotated,
+      },
+      reason,
+      request,
     );
-    const take = Math.min(limit + 1, PAGINATION.MAX_LIMIT);
 
-    const qb = this.userRepository
-      .createQueryBuilder("user")
-      .where("user.username ILIKE :query", { query: `%${query}%` })
-      .orderBy("user.createdAt", "DESC")
-      .addOrderBy("user.id", "DESC")
-      .take(take);
+    return { rotated };
+  }
 
-    if (parsedCursor) {
-      qb.andWhere(
-        "(user.createdAt < :cursorDate OR (user.createdAt = :cursorDate AND user.id < :cursorId))",
-        {
-          cursorDate: new Date(parsedCursor.createdAt),
-          cursorId: parsedCursor.id,
-        },
-      );
+  async listUserSessions(userId: number): Promise<{
+    id: string;
+    createdAt: Date;
+    lastUsedAt: Date | null;
+    expiresAt: Date;
+    revoked: boolean;
+  }[]> {
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException("User not found");
     }
 
-    const users = await qb.getMany();
-    const hasMore = users.length > limit;
-    if (hasMore) users.pop();
-
-    const nextCursor =
-      hasMore && users.length > 0
-        ? encodeCursor({
-            id: users[users.length - 1].id,
-            createdAt: users[users.length - 1].createdAt.toISOString(),
-          })
-        : null;
-
-    return new CursorPaginatedResponseDto(users, nextCursor, hasMore, limit);
-  }
-
-  async getReportStats(): Promise<{
-    pendingCount: number;
-    oldestUnresolvedAge: number | null;
-    resolvedTodayCount: number;
-  }> {
-    const pendingCount = await this.reportRepository.count({
-      where: { status: ReportStatus.PENDING },
-    });
-
-    const oldestPending = await this.reportRepository.findOne({
-      where: { status: ReportStatus.PENDING },
-      order: { createdAt: "ASC" },
-    });
-
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-
-    const resolvedToday = await this.reportRepository
-      .createQueryBuilder("report")
-      .where("report.status = :status", { status: ReportStatus.RESOLVED })
-      .andWhere("report.resolvedAt >= :todayStart", { todayStart })
-      .getCount();
-
-    return {
-      pendingCount,
-      oldestUnresolvedAge: oldestPending
-        ? Math.floor((Date.now() - oldestPending.createdAt.getTime()) / 1000)
-        : null,
-      resolvedTodayCount: resolvedToday,
-    };
-  }
-
-  // Analytics
-  async getAnalytics(startDate?: Date, endDate?: Date) {
-    const start = startDate || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const end = endDate || new Date();
-
-    // Total counts
-    const totalUsers = await this.userRepository.count();
-    const totalConfessions = await this.confessionRepository.count();
-    const totalReports = await this.reportRepository.count();
-
-    // Active users (last 30 days)
-    const activeUsers = await this.userRepository
-      .createQueryBuilder("user")
-      .where("user.updatedAt >= :start", { start })
-      .getCount();
-
-    // Reports by status
-    const reportsByStatus = await this.reportRepository
-      .createQueryBuilder("report")
-      .select("report.status", "status")
-      .addSelect("COUNT(*)", "count")
-      .where("report.createdAt >= :start", { start })
-      .andWhere("report.createdAt <= :end", { end })
-      .groupBy("report.status")
-      .getRawMany();
-
-    // Reports by type
-    const reportsByType = await this.reportRepository
-      .createQueryBuilder("report")
-      .select("report.type", "type")
-      .addSelect("COUNT(*)", "count")
-      .where("report.createdAt >= :start", { start })
-      .andWhere("report.createdAt <= :end", { end })
-      .groupBy("report.type")
-      .getRawMany();
-
-    // Confessions over time (daily)
-    const confessionsOverTime = await this.confessionRepository
-      .createQueryBuilder("confession")
-      .select("DATE_TRUNC('day', confession.created_at)", "date")
-      .addSelect("COUNT(*)", "count")
-      .where("confession.created_at >= :start", { start })
-      .andWhere("confession.created_at <= :end", { end })
-      .groupBy("DATE_TRUNC('day', confession.created_at)")
-      .orderBy("date", "ASC")
-      .getRawMany();
-
-    // Banned users
-    const bannedUsers = await this.userRepository.count({
-      where: { is_active: false },
-    });
-
-    // Hidden confessions
-    const hiddenConfessions = await this.confessionRepository.count({
-      where: { isHidden: true },
-    });
-
-    // Deleted confessions
-    const deletedConfessions = await this.confessionRepository.count({
-      where: { isDeleted: true },
-    });
-
-    return {
-      overview: {
-        totalUsers,
-        activeUsers,
-        totalConfessions,
-        totalReports,
-        bannedUsers,
-        hiddenConfessions,
-        deletedConfessions,
-      },
-      reports: {
-        byStatus: reportsByStatus,
-        byType: reportsByType,
-      },
-      trends: {
-        confessionsOverTime,
-      },
-      period: {
-        start,
-        end,
-      },
-    };
-  }
-
-  async getObservability(startDate?: Date, endDate?: Date) {
-    const [auditStats, diagnostics] = await Promise.all([
-      this.auditLogService.getStatistics(startDate, endDate),
-      this.jobManagementService.getDiagnostics(),
-    ]);
-
-    return {
-      audit: {
-        totalLogs: auditStats.totalLogs,
-        actionTypeCounts: auditStats.actionTypeCounts,
-      },
-      notifications: {
-        main: diagnostics.main,
-        dlq: diagnostics.dlq,
-      },
-      generatedAt: new Date().toISOString(),
-    };
+    const sessions = await this.sessionService.listForUser(userId);
+    return sessions.map((s) => ({
+      id: s.id,
+      createdAt: s.createdAt,
+      lastUsedAt: s.lastUsedAt ?? null,
+      expiresAt: s.expiresAt,
+      revoked: s.revokedAt != null,
+    }));
   }
 }
