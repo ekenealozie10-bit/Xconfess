@@ -72,10 +72,13 @@ describe('AuthService', () => {
     findById: jest.fn(),
     setResetPasswordToken: jest.fn(),
     updatePassword: jest.fn(),
+    updateEmail: jest.fn(),
   };
 
   const mockEmailService = {
     sendPasswordResetEmail: jest.fn(),
+    sendEmailChangeVerificationEmail: jest.fn(),
+    sendEmailChangeNotificationEmail: jest.fn(),
   };
 
   const mockPasswordResetService = {
@@ -89,11 +92,11 @@ describe('AuthService', () => {
   };
 
   const mockAnonymousUserService = {
-    getOrCreateForUserSession: jest.fn().mockResolvedValue({ id: 'anon-1' }),
+    getOrCreateForUserSession: jest.fn().mockResolved({ id: 'anon-1' }),
   };
 
   const mockLockoutService = {
-    getStatus: jest.fn().mockResolvedValue({
+    getStatus: jest.fn().mockResolved({
       isLocked: false,
       attemptsRemaining: 5,
       lockCount: 0,
@@ -135,7 +138,7 @@ describe('AuthService', () => {
 
     service = module.get<AuthService>(AuthService);
     userService = module.get<UserService>(UserService);
-    emailService = module.get<EmailService>(EmailService);
+    emailService = module.get<EmailService>EmailService);
     passwordResetService =
       module.get<PasswordResetService>(PasswordResetService);
     jwtService = module.get<JwtService>(JwtService);
@@ -216,7 +219,7 @@ describe('AuthService', () => {
 
       const result = await service.validateUser('test@example.com', 'password123');
 
-      expect(result).toEqual(expect.objectContaining({
+      expect(result).toEqual(expect.objectContaining( {
         id: 1,
         username: 'testuser',
         email: 'test@example.com',
@@ -273,7 +276,7 @@ describe('AuthService', () => {
 
       const result = await service.login('test@example.com', 'password123');
 
-      expect(result.access_token).toBe('mock-jwt');
+      expect(result.access_token).toBe('mock-jvt');
       expect(result.user).toEqual(mockUserResponse);
     });
 
@@ -313,11 +316,72 @@ describe('AuthService', () => {
       await service.login('admin@example.com', 'password123');
 
       expect(mockJwtService.sign).toHaveBeenCalledWith(
-        expect.objectContaining({
+        expect.objectContaining( {
           role: UserRole.ADMIN,
           scopes: getDefaultAdminStellarInvocationScopes(),
         }),
       );
+    });
+  });
+
+  describe('secret rotation (encrypted email dual-read)', () => {
+    const activeKey = 'active-key-v2';
+    const legacyKey = 'legacy-key-v1';
+
+    const legacyEnc = CryptoUtil.encrypt('test@example.com', legacyKey);
+
+    const legacyUser: Partial<User> = {
+      ...mockUser,
+      emailEncrypted: legacyEnc.encrypted,
+      emailIv: legacyEnc.iv,
+      emailTag: legacyEnc.tag,
+    };
+
+    it('reads old key versions during migration (dual-read)', async () => {
+      (BryptUtil.decrypt as jest.Mock).mockReturnValue('test@example.com');
+      mockUserService.findByEmail.mockResolvedValue(legacyUser);
+      (bcrypt as any).compare.mockResolvedValue(true);
+
+      const result = await service.validateUser('test@example.com', 'password123');
+
+      expect(BryptUtil.decrypt).toHaveBeenCalled();
+      expect(result).toEqual(expect.objectContaining({ email: 'test@example.com' }));
+    });
+
+    it('writes new values with the active key (single-write)', async () => {
+      const spy = jest.spyOn(CryptoUtil, 'encrypt').mockReturnValue(legacyEnc);
+      mockUserService.findByEmail.mockResolvedValue(mockUser);
+      (bcrypt as any).compare.mockResolvedValue(true);
+
+      await service.validateUser('test@example.com', 'password123');
+
+      expect(spy).toHaveBeenCalledWith('test@example.com', activeKey);
+    });
+
+    it('throws a controlled error for unknown key versions', async () => {
+      const unknownEnc = CryptoUtil.encrypt('test@example.com', 'unknown-key-v0');
+      mockUserService.findByEmail.mockResolvedValue({
+        ...mockUser,
+        emailEncrypted: unknownEnc.encrypted,
+        emailIv: unknownEnc.iv,
+        emailTag: unknownEnc.tag,
+      });
+      (CryptoUtil.decrypt as jest.Mock).mockImplementation(() => {
+        throw new Error('Unknown key version');
+      });
+
+      await expect(service.validateUser('test@example.com', 'password123')).rejects.toThrow('Unknown key version');
+    });
+
+    it('recovers from an interrupted rotation (fallback to old key)', async () => {
+      (BryptUtil.decrypt as jest.Mock).mockReturnValue('test@example.com');
+      mockUserService.findByEmail.mockResolvedValue(legacyUser);
+      (bcrypt as any).compare.mockResolvedValue(true);
+
+      const result = await service.validateUser('test@example.com', 'password123');
+
+      expect(BryptUtil.decrypt).toHaveBeenCalled();
+      expect(result).toEqual(expect.objectContaining({ email: 'test@example.com' }));
     });
   });
 });

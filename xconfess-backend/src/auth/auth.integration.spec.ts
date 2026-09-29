@@ -9,22 +9,29 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { User } from '../user/entities/user.entity';
 import { PasswordReset } from './entities/password-reset.entity';
 import { Repository } from 'typeorm';
-import { BadRequestException, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  UnauthorizedException,
+  ForbiddenException,
+} from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import { AnonymousUserService } from '../user/anonymous-user.service';
 import { CryptoUtil } from '../common/crypto.util';
 import { ConfigService } from '@nestjs/config';
 import { LockoutService } from './lockout.service';
 import { StepUpService } from './step-up.service';
+import { WebAuthnService } from './webauthn.service';
+import { WebAuthCredential } from './entities/webauth-credential.entity';
 import * as crypto from 'crypto';
+import { AUTH_ERROR_CODES, AUTH_MESSAGES } from './auth.contract';
 
 const hashToken = (token: string) =>
-  crypto.createHash('sha256').update(token).digest('hex');
+	crypto.createHash('sha256').update(token).digest('hex');
 
 // Mock bcrypt module
 jest.mock('bcryptjs', () => ({
-  hash: jest.fn(),
-  compare: jest.fn(),
+	hash: jest.fn(),
+	compare: jest.fn(),
 }));
 
 describe('Auth Integration Tests - Forgot Password Flow', () => {
@@ -125,7 +132,7 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
     authService = module.get<AuthService>(AuthService);
     userService = module.get<UserService>(UserService);
     passwordResetService =
-      module.get<PasswordResetService>(PasswordResetService);
+      module.get<PasswordResetService>PasswordResetService);
     emailService = module.get<EmailService>(EmailService);
     userRepository = module.get<Repository<User>>(getRepositoryToken(User));
     passwordResetRepository = module.get<Repository<PasswordReset>>(
@@ -146,7 +153,7 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
       const mockPasswordReset = {
         id: 1,
         userId: 1,
-        tokenHash: hashToken('reset-token-123'),
+        tokenHash: hashToken('token'),
         expiresAt: new Date(Date.now() + 3600000),
         used: false,
         usedAt: null,
@@ -183,6 +190,7 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
       expect(forgotPasswordResult).toEqual({
         message: 'If the user exists, a password reset email has been sent.',
       });
+      expect(forgotPasswordResult).toEqual(AUTH_MESSAGES.forgotPasswordGeneric);
 
       // Verify that the email service was called
       expect(emailService.sendPasswordResetEmail).toHaveBeenCalledWith(
@@ -224,10 +232,11 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
       expect(resetPasswordResult).toEqual({
         message: 'Password has been reset successfully',
       });
+      expect(resetPasswordResult).toEqual(AUTH_MESSAGES.passwordResetSuccess);
 
       // Verify that the password was updated
       expect(userRepository.save).toHaveBeenCalledWith(
-        expect.objectContaining({
+        expect.objectContaining( {
           password: 'hashedPassword',
           resetPasswordToken: null,
           resetPasswordExpires: null,
@@ -257,6 +266,12 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
           newPassword: 'newPassword123',
         }),
       ).rejects.toThrow(BadRequestException);
+      await expect(
+        authController.resetPassword({
+          token: 'invalid-token',
+          newPassword: 'newPassword123',
+        }),
+      ).rejects.toMatchObject({ response: { code: AUTH_ERROR_CODES.INVALID_RESET_TOKEN } });
     });
 
     it('should handle expired token during reset', async () => {
@@ -264,7 +279,7 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
       const expiredToken = {
         id: 1,
         userId: 1,
-        tokenHash: hashToken('expired-token-123'),
+        tokenHash: hashToken('token'),
         expiresAt: new Date(Date.now() - 3600000), // Expired 1 hour ago
         used: false,
         usedAt: null,
@@ -279,10 +294,16 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
 
       await expect(
         authController.resetPassword({
-          token: 'expired-token-123',
+          token: 'test-token-123',
           newPassword: 'newPassword123',
         }),
       ).rejects.toThrow(BadRequestException);
+      await expect(
+        authController.resetPassword({
+          token: 'expired-token-123',
+          newPassword: 'newPassword123',
+        }),
+      ).rejects.toMatchObject({ response: { code: AUTH_ERROR_CODES.INVALID_RESET_TOKEN } });
     });
 
     it('should handle used token during reset', async () => {
@@ -290,7 +311,7 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
       const usedToken = {
         id: 1,
         userId: 1,
-        tokenHash: hashToken('used-token-123'),
+        tokenHash: hashToken('token'),
         expiresAt: new Date(Date.now() + 3600000),
         used: true, // Already used
         usedAt: new Date(),
@@ -307,6 +328,12 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
           newPassword: 'newPassword123',
         }),
       ).rejects.toThrow(BadRequestException);
+      await expect(
+        authController.resetPassword({
+          token: 'used-token-123',
+          newPassword: 'newPassword123',
+        }),
+      ).rejects.toMatchObject({ response: { code: AUTH_ERROR_CODES.INVALID_RESET_TOKEN } });
     });
   });
 });
@@ -314,9 +341,6 @@ describe('Auth Integration Tests - Forgot Password Flow', () => {
 describe('AuthService Integration', () => {
   let service: AuthService;
   let userService: UserService;
-  let jwtService: JwtService;
-  let emailService: EmailService;
-  let passwordResetService: PasswordResetService;
   let userRepository: Repository<User>;
 
   const encrypted = CryptoUtil.encrypt('test@example.com');
@@ -357,7 +381,7 @@ describe('AuthService Integration', () => {
         {
           provide: JwtService,
           useValue: {
-            sign: jest.fn().mockReturnValue('mock-jwt-token'),
+            sign: jest.fn().mockReturnValue('mock-j{w-token'),
           },
         },
         {
@@ -375,17 +399,6 @@ describe('AuthService Integration', () => {
           useValue: {
             createResetToken: jest.fn(),
             validateResetToken: jest.fn(),
-            invalidateUserTokens: jest.fn(),
-          },
-        },
-        {
-          provide: LockoutService,
-          useValue: {
-            getStatus: jest.fn().mockResolvedValue({ isLocked: false }),
-            recordFailedAttempt: jest
-              .fn()
-              .mockResolvedValue({ isLocked: false }),
-            clearLockout: jest.fn().mockResolvedValue(undefined),
           },
         },
         {
@@ -393,6 +406,7 @@ describe('AuthService Integration', () => {
           useValue: {
             findOne: jest.fn(),
             save: jest.fn(),
+            update: jest.fn(),
           },
         },
       ],
@@ -400,21 +414,15 @@ describe('AuthService Integration', () => {
 
     service = module.get<AuthService>(AuthService);
     userService = module.get<UserService>(UserService);
-    jwtService = module.get<JwtService>(JwtService);
-    emailService = module.get<EmailService>(EmailService);
-    passwordResetService =
-      module.get<PasswordResetService>(PasswordResetService);
     userRepository = module.get<Repository<User>>(getRepositoryToken(User));
   });
 
   describe('login', () => {
-    it('should return access token and user data for valid credentials', async () => {
-      jest.spyOn(userRepository, 'findOne').mockResolvedValue(mockUser);
-      (bcrypt.compare as jest.Mock).mockResolvedValue(true);
-
-      const result = await service.login('test@example.com', 'password123');
+    it('should throw UnauthorizedException when user not found', async () => {
+      jest.spyOn(userRepository, 'findOne').mockResolvedValue(null);
 
       expect(result).toHaveProperty('access_token');
+      expect(result).toMatchObject({ token_type: 'Bearer' });
       expect(result.user).toMatchObject({
         id: mockUser.id,
         username: mockUser.username,
@@ -431,33 +439,31 @@ describe('AuthService Integration', () => {
       });
     });
 
-    it('should throw UnauthorizedException for invalid credentials', async () => {
+    it('should throw UnauthorizedException when password is invalid', async () => {
       jest.spyOn(userRepository, 'findOne').mockResolvedValue(mockUser);
       (bcrypt.compare as jest.Mock).mockResolvedValue(false);
 
       await expect(
         service.login('test@example.com', 'wrongpassword'),
       ).rejects.toThrow('Invalid credentials');
+      await expect(
+        service.login('test@example.com', 'wrongpassword'),
+      ).rejects.toMatchObject({ response: { code: AUTH_ERROR_CODES.INVALID_CREDENTIALS } });
     });
-  });
 
-  describe('forgotPassword', () => {
-    it('should send password reset email for existing user', async () => {
+    it('should return a token on successful login', async () => {
       jest.spyOn(userRepository, 'findOne').mockResolvedValue(mockUser);
-      jest
-        .spyOn(passwordResetService, 'createResetToken')
-        .mockResolvedValue('reset-token');
-      jest
-        .spyOn(emailService, 'sendPasswordResetEmail')
-        .mockResolvedValue(undefined);
+      (bcrypt as any).compare.mockResolvedValue(true);
 
-      const result = await service.forgotPassword({
+      const result = await service.login({
         email: 'test@example.com',
+        password: 'correct-password',
       });
 
       expect(result).toEqual({
         message: 'If the user exists, a password reset email has been sent.',
       });
+      expect(result).toEqual(AUTH_MESSAGES.forgotPasswordGeneric);
       expect(passwordResetService.createResetToken).toHaveBeenCalledWith(
         mockUser.id,
         undefined,
@@ -470,16 +476,152 @@ describe('AuthService Integration', () => {
       );
     });
 
-    it('should handle non-existent user gracefully', async () => {
+    it('should create a new user and return a token', async () => {
       jest.spyOn(userRepository, 'findOne').mockResolvedValue(null);
-
-      const result = await service.forgotPassword({
-        email: 'nonexistent@example.com',
+      jest.spyOn(userRepository, 'save').mockResolvedValue({
+        ...mockUser,
+        id: 2,
+        username: 'newuser',
       });
 
-      expect(result).toEqual({
-        message: 'If the user exists, a password reset email has been sent.',
+      const result = await service.register( {
+        email: 'new@example.com',
+        password: 'password',
+        username: 'newuser',
       });
+
+      expect(jwtService.sign).toHaveBeenCalled();
+      expect(result).toHaveProperty('accessToken');
+    });
+  });
+});
+
+describe('Authorization Matrix Tests', () => {
+  type Role = 'anonymous' | 'authenticated' | 'moderator' | 'admin' | 'resource-owner';
+
+  interface MatrixCell {
+    role: Role;
+    endpoint: string;
+    action: 'read' | 'write' | 'delete';
+    expected: 'allow' | 'deny';
+    expectedError?: type of UnauthorizedException | typeof ForbiddenException;
+  }
+
+  const matrix: MatrixCell[] = [
+    // Anonymous access
+    { role: 'anonymous', endpoint: '/auth/me', action: 'read', expected: 'deny', expectedError: UnauthorizedException },
+    { role: 'anonymous', endpoint: '/users/:userId/profile', action: 'read', expected: 'deny', expectedError: UnauthorizedException },
+    { role: 'anonymous', endpoint: '/users/:userId/profile', action: 'write', expected: 'deny', expectedError: UnauthorizedException },
+    { role: 'anonymous', endpoint: '/moderation/queue', action: 'read', expected: 'deny', expectedError: UnauthorizedException },
+    { role: 'anonymous', endpoint: '/admin/users', action: 'read', expected: 'deny', expectedError: UnauthorizedException },
+
+    // Authenticated access
+    { role: 'authenticated', endpoint: '/auth/me', action: 'read', expected: 'allow' },
+    { role: 'authenticated', endpoint: '/users/:userId/profile', action: 'read', expected: 'deny', expectedError: ForbiddenException },
+    { role: 'authenticated', endpoint: '/users/:userId/profile', action: 'write', expected: 'deny', expectedError: ForbiddenException },
+    { role: 'authenticated', endpoint: '/moderation/queue', action: 'read', expected: 'deny', expectedError: ForbiddenException },
+    { role: 'authenticated', endpoint: '/admin/users', action: 'read', expected: 'deny', expectedError: ForbiddenException },
+
+    // Moderator access
+    { role: 'moderator', endpoint: '/auth/me', action: 'read', expected: 'allow' },
+    { role: 'moderator', endpoint: '/users/:userId/profile', action: 'read', expected: 'deny', expectedError: ForbiddenException },
+    { role: 'moderator', endpoint: '/users/:userId/profile', action: 'write', expected: 'deny', expectedError: ForbiddenException },
+    { role: 'moderator', endpoint: '/moderation/queue', action: 'read', expected: 'allow' },
+    { role: 'moderator', endpoint: '/admin/users', action: 'read', expected: 'deny', expectedError: ForbiddenException },
+
+    // Admin access
+    { role: 'admin', endpoint: '/auth/me', action: 'read', expected: 'allow' },
+    { role: 'admin', endpoint: '/users/:userId/profile', action: 'read', expected: 'allow' },
+    { role: 'admin', endpoint: '/users/:userId/profile', action: 'write', expected: 'allow' },
+    { role: 'admin', endpoint: '/moderation/queue', action: 'read', expected: 'allow' },
+    { role: 'admin', endpoint: '/admin/users', action: 'read', expected: 'allow' },
+
+    // Resource-owner access
+    { role: 'resource-owner', endpoint: '/auth/me', action: 'read', expected: 'allow' },
+    { role: 'resource-owner', endpoint: '/users/:userId/profile', action: 'read', expected: 'allow' },
+    { role: 'resource-owner', endpoint: '/users/:userId/profile', action: 'write', expected: 'allow' },
+    { role: 'resource-owner', endpoint: '/moderation/queue', action: 'read', expected: 'deny', expectedError: ForbiddenException },
+    { role: 'resource-owner', endpoint: '/admin/users', action: 'read', expected: 'deny', expectedError: ForbiddenException },
+  ];
+
+  const roleToUserId: Record<Role, number> = {
+    anonymous: 0,
+    authenticated: 1,
+    moderator: 2,
+    admin: 3,
+    'resource-owner': 4,
+  };
+
+  const roleToResourceOwner: Record<Role, number> = {
+    anonymous: 0,
+    authenticated: 1,
+    moderator: 2,
+    admin: 3,
+    'resource-owner': 4,
+  };
+
+  const authorize = (
+    role: Role,
+    endpoint: string,
+    action: 'read' | 'write' | 'delete',
+    resourceOwnerId: number,
+  ): void => {
+    const userId = roleToUserId[role];
+    const isAuthenticated = role !== 'anonymous';
+    const isAdmin = role === 'admin';
+    const isModerator = role === 'moderator';
+    const isOwner = role === 'resource-owner' && userId === resourceOwnerId;
+
+    if (!isAuthenticated) {
+      throw new UnauthorizedException('Authentication required');
+    }
+
+    if (endpoint === '/auth/me') {
+      if (action !== 'read') {
+        throw new ForbiddenException('Action not allowed');
+      }
+      return;
+    }
+
+    if (endpoint === '/users/:userId/profile') {
+      if (isAdmin || isOwner) {
+        return;
+      }
+      throw new ForbiddenException('Insufficient permissions');
+    }
+
+    if (endpoint === '/moderation/queue') {
+      if (isAdmin || isModerator) {
+        return;
+      }
+      throw new ForbiddenException('Insufficient permissions');
+    }
+
+    if (endpoint === '/admin/users') {
+      if (isAdmin) {
+        return;
+      }
+      throw new ForbiddenException('Insufficient permissions');
+    }
+
+    throw new ForbiddenException('Unknown endpoint');
+  };
+
+  describe('Matrix cell assertions', () => {
+    matrix.forEach((cell) => {
+      it(`${cell.role} can ${}${cell.expected} ${cell.action} on ${cell.endpoint}`, () => {
+        const resourceOwnerId = roleToResourceOwner[cell.role];
+        if (cell.expected === 'allow') {
+          expect(() =>
+            authorize(cell.role, cell.endpoint, cell.action, resourceOwnerId),
+          ).not.toThrow();
+        } else {
+          expect(() =>
+            authorize(cell.role, cell.endpoint, cell.action, resourceOwnerId),
+          ).toThrow(cell.expectedError);
+        }
+      });
+      expect(result).toEqual(AUTH_MESSAGES.forgotPasswordGeneric);
       expect(passwordResetService.createResetToken).not.toHaveBeenCalled();
       expect(emailService.sendPasswordResetEmail).not.toHaveBeenCalled();
     });

@@ -1,3 +1,4 @@
+
 # Artifact Provenance & SBOM Attestations
 
 This document describes the provenance and Software Bill of Materials (SBOM)
@@ -91,3 +92,4 @@ grype sbom:sbom-backend-<sha>.cdx.json
   the project moves to container-based deployment.
 - The `@cyclonedx/cyclonedx-npm` plugin is pinned to `1.19.3`.  Bump it when
   security advisories are published.
+

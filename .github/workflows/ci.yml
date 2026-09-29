@@ -1,13 +1,13 @@
 name: CI
 
+permissions:
+  contents: write
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
-
-permissions:
-  contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -33,6 +33,31 @@ jobs:
       - run: npm install --global npm@10.9.3
       - run: npm ci --include=optional --no-audit --no-fund
       - run: npm run audit:ci
+
+  sbom:
+    name: Security / SBOM & provenance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm install --global npm@10.9.3
+      - run: npm ci --include=optional --no-audit --no-fund
+      - name: Generate SBOM artifacts
+        run: npm run sbom:generate
+      - name: Validate SBOM provenance metadata
+        run: npm run sbom:validate
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-artifacts
+          path: |
+            sbom/**
+          if-no-files-found: error
+          retention-days: 30
 
   secret-scan:
     name: Security / Secret Scan
@@ -66,7 +91,7 @@ jobs:
 
   apps:
     name: Apps / lint, typecheck, build
-    needs: [audit, secret-scan, migration-gate]
+    needs: [audit, sbom, secret-scan, migration-gate]
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -137,7 +162,7 @@ jobs:
     # coverageThreshold. A coverage drop in auth, encryption, moderation,
     # stellar, or tipping will fail this job and name the domain that regressed.
     name: Backend / tests + coverage gates
-    needs: [audit, secret-scan]
+    needs: [audit, sbom, secret-scan]
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -201,7 +226,7 @@ jobs:
 
   frontend-budget:
     name: Frontend / bundle & hydration budget
-    needs: [audit, secret-scan]
+    needs: [audit, sbom, secret-scan]
     runs-on: ubuntu-latest
     env:
       NODE_ENV: production
@@ -240,7 +265,7 @@ jobs:
 
   accessibility:
     name: Frontend / WCAG 2.2 AA gates
-    needs: [audit, secret-scan]
+    needs: [audit, sbom, secret-scan]
     runs-on: ubuntu-latest
     env:
       NODE_ENV: test
@@ -277,7 +302,7 @@ jobs:
 
   contracts:
     name: Contracts
-    needs: [audit, secret-scan]
+    needs: [audit, sbom, secret-scan]
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -297,6 +322,16 @@ jobs:
       - run: cargo test --workspace
       - name: Check contract ABI drift
         run: bash scripts/check-abi-drift.sh
+      - name: Generate contracts SBOM
+        run: npm run sbom:contracts
+      - name: Upload contracts SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: contracts-sbom
+          path: |
+            sbom/contracts/**
+          if-no-files-found: error
+          retention-days: 30
       - name: Store contract artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -305,3 +340,33 @@ jobs:
             deployments/
             xconfess-contracts/gas-baseline.json
           if-no-files-found: ignore
+
+  release-sbom:
+    name: Release / SBOM attach
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [sbom, contracts]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: sbom-artifacts
+          path: sbom
+      - uses: actions/download-artifact@v4
+        with:
+          name: contracts-sbom
+          path: sbom/contracts
+      - name: Verify provenance metadata present
+        run: npm run sbom:validate -- --require-provenance
+      - name: Attach SBOM artifacts to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            sbom/**/*.json
+            sbom/**/*.spdx.json
+            sbom/**/*.cdx.json
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

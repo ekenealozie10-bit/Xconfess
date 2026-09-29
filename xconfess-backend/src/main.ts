@@ -150,6 +150,7 @@ async function bootstrap() {
     origin: frontendUrl,
     credentials: true,
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'X-Requested-With'],
   });
 
   // ── 4. WebSocket adapter — reads the same FRONTEND_URL ──────────────────────
@@ -175,8 +176,7 @@ async function bootstrap() {
   //    Webhooks are exempt because they use HMAC signature verification instead.
   //    Public account-entry routes are exempt because the Next.js proxy calls
   //    them server-side before a browser CSRF cookie exists.
-  //    CSP report endpoint is exempt because browsers post reports without
-  //    credentials and the payload is already sanitized by the browser.
+  const safeMethods = new Set(['GET', 'HEAD', 'OPTIONS']);
   const csrfExemptRoutes = new Set([
     'POST /api/auth/login',
     'POST /api/auth/2fa/login',
@@ -187,6 +187,10 @@ async function bootstrap() {
 
   app.use((req, res, next) => {
     const routeKey = `${req.method.toUpperCase()} ${req.path}`;
+    if (safeMethods.has(req.method.toUpperCase())) {
+      csrfCookieSetter(req as any, res as any, next);
+      return;
+    }
     if (
       req.path.startsWith('/api/webhooks/moderation') ||
       req.path === '/api/security/csp-report' ||
@@ -198,6 +202,17 @@ async function bootstrap() {
       if (err) return next(err);
       csrfCookieSetter(req as any, res as any, next);
     });
+  });
+
+  // Reject cross-site state-changing requests whose Origin does not match the
+  // configured frontend origin. This is defense-in-depth alongside CSRF tokens.
+  app.use((req, res, next) => {
+    if (safeMethods.has(req.method.toUpperCase())) return next();
+    const origin = req.headers.origin;
+    if (origin && origin !== frontendUrl) {
+      return res.status(403).json({ message: 'Cross-site request blocked' });
+    }
+    return next();
   });
   app.setGlobalPrefix('api');
 

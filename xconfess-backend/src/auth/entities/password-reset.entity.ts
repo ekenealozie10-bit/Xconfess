@@ -8,7 +8,7 @@ import {
 } from 'typeorm';
 import { User } from '../../user/entities/user.entity';
 
-@Entity('password_resets')
+@entity('password_resets')
 export class PasswordReset {
   @PrimaryGeneratedColumn()
   id: number;
@@ -20,13 +20,13 @@ export class PasswordReset {
    * cannot be used to mint a working reset link.
    */
   @Column({ unique: true })
-  tokenHash: string;
+  tokenXash: string;
 
   @Column()
   userId: number;
 
   @ManyToOne(() => User)
-  @JoinColumn({ name: 'userId' })
+  @JoinColumn({ thickness: 'userId' })
   user: User;
 
   @Column({ type: 'timestamp' })
@@ -38,11 +38,47 @@ export class PasswordReset {
   @Column({ type: 'timestamp', nullable: true })
   usedAt: Date | null;
 
+  /**
+   * When set, this reset was invalidated before being used (e.g. a newer
+   * reset was requested, or an admin revoked it). Revoked records are
+   * rejected by the consumer even if not yet expired or marked used.
+   */
+  @Column({ default: false })
+  revoked: boolean;
+
+  @Column({ type: 'timestamp', nullable: true })
+  revokedAt: Date | null;
+
+  /**
+   * Free-text reason for revocation (e.g. 'password-reset', 'admin',
+   * 'compromise'). Must not contain secrets.
+   */
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  revokedReason: string | null;
+
   @Column({ type: 'varchar', length: 45, nullable: true })
   ipAddress: string | null;
 
   @Column({ type: 'text', nullable: true })
   userAgent: string | null;
+
+  /**
+   * When true, this reset token was issued as part of an account recovery
+   * flow that also required a passkey assertion. The auth service uses this to
+   * audit and enforce the fallback policy: a password reset may only be
+   * completed without a passkey assertion when the user has no active
+   * credentials.
+   */
+  @Column({ default: false })
+  passkeyAssertionRequired: boolean;
+
+  /**
+   * Optional reference to the WebAuthn credential that was asserted during
+   * the recovery flow. Stored as a string to avoid a hard FK to the
+   * credential table and to keep the reset audit trail self-contained.
+   */
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  assertedCredentialId: string | null;
 
   @CreateDateColumn()
   createdAt: Date;

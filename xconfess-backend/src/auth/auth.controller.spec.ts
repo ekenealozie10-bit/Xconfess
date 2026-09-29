@@ -11,6 +11,9 @@ describe('AuthController', () => {
   const mockAuthService = {
     forgotPassword: jest.fn(),
     resetPassword: jest.fn(),
+    requestEmailChange: jest.fn(),
+    verifyEmailChange: jest.fn(),
+    rollbackEmailChange: jest.fn(),
   };
 
   const mockStepUpService = {
@@ -229,4 +232,100 @@ describe('AuthController', () => {
       );
     });
   });
-});
+
+  describe('email change verification', () => {
+    const mockRequest = {
+      ip: '192.168.1.1',
+      headers: {
+        'user-agent': 'Mozilla/5.0...',
+      },
+      connection: {
+        remoteAddress: '10.0.0.1',
+      },
+    } as any;
+
+    it('should request an email change without activating the new address', async () => {
+      const dto = { newEmail: 'new@test.local' };
+      const expected = {
+        message: 'If the account exists, a verification email has been sent.',
+      };
+
+      mockAuthService.requestEmailChange.mockResolvedValue(expected);
+
+      const result = await controller.requestEmailChange(dto, mockRequest);
+
+      expect(mockAuthService.requestEmailChange).toHaveBeenCalledWith(
+        dto,
+        '192.168.1.1',
+        'Mozilla/5.0...',
+      );
+      expect(result).toEqual(expected);
+    });
+
+    it('should not leak account existence when requesting an email change', async () => {
+      const dto = { newEmail: 'new@test.local' };
+
+      mockAuthService.requestEmailChange.mockRejectedValue(
+        new Error('Database connection failed'),
+      );
+
+      const result = await controller.requestEmailChange(dto, mockRequest);
+
+      expect(result).toEqual({
+        message: 'If the account exists, a verification email has been sent.',
+      });
+    });
+
+    it('should verify an email change challenge and activate the new address', async () => {
+      const dto = { token: 'valid-email-change-token' };
+      const expected = { message: 'Email address has been updated.' };
+
+      mockAuthService.verifyEmailChange.mockResolvedValue(expected);
+
+      const result = await controller.verifyEmailChange(dto);
+
+      expect(mockAuthService.verifyEmailChange).toHaveBeenCalledWith(
+        'valid-email-change-token',
+      );
+      expect(result).toEqual(expected);
+    });
+
+    it('should reject replayed email change challenges', async () => {
+      const dto = { token: 'replayed-email-change-token' };
+
+      mockAuthService.verifyEmailChange.mockRejectedValue(
+        new BadRequestException('Invalid or expired email change token'),
+      );
+
+      await expect(controller.verifyEmailChange(dto)).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('should allow rollback to the previous address within the recovery window', async () => {
+      const dto = { token: 'valid-rollback-token' };
+      const expected = { message: 'Email address rolled back.' };
+
+      mockAuthService.rollbackEmailChange.mockResolvedValue(expected);
+
+      const result = await controller.rollbackEmailChange(dto);
+
+      expect(mockAuthService.rollbackEmailChange).toHaveBeenCalledWith(
+        'valid-rollback-token',
+      );
+      expect(result).toEqual(expected);
+    });
+
+    it('should reject rollback attempts outside the recovery window', async () => {
+      const dto = { token: 'expired-rollback-token' };
+
+      mockAuthService.rollbackEmailChange.mockRejectedValue(
+        new BadRequestException('Rollback window has expired'),
+      );
+
+      await expect(controller.rollbackEmailChange(dto)).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+  });
+})
