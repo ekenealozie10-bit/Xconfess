@@ -42,6 +42,7 @@ import { createHash } from 'crypto';
  * - `signature`                               — signature-bearing fields
  * - `privateKey|apiKey|bearer`                — key-bearing / bearer fields
  * - `authorization`                           — authorization header values
+ * - `email|sender|recipient|mail`             — email-bearing fields
  *
  * ### Value-Based Detection (regardless of field name)
  * - **JWT tokens**: values matching `xxx.yyy.zzz` (three base64url segments)
@@ -114,6 +115,10 @@ const SENSITIVE_NAME_PATTERNS: RegExp[] = [
   /apiKey/i,
   /bearer/i,
   /authorization/i,
+  /email/i,
+  /mail/i,
+  /sender/i,
+  /recipient/i,
 ];
 
 const JWT_PATTERN = /^[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+$/;
@@ -122,6 +127,7 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const REDACTED_VALUE = '[REDACTED]';
 const REDACTED_EMAIL = '[REDACTED_EMAIL]';
+const MASKED_EMAIL_DOMAIN = '[MASKED_DOMAIN]';
 const USER_ID_PREFIX = 'user_';
 const USER_ID_HASH_LENGTH = 12;
 
@@ -230,6 +236,9 @@ export class AuditLogRedactionService {
     const stringValue = value as string;
 
     if (this.isSensitiveField(key)) {
+      if (EMAIL_PATTERN.test(stringValue)) {
+        return this.maskEmail(stringValue);
+      }
       return REDACTED_VALUE;
     }
 
@@ -240,12 +249,7 @@ export class AuditLogRedactionService {
       return this.maskJwt(stringValue);
     }
 
-    if (
-      (key.toLowerCase().includes('email') ||
-        key.toLowerCase() === 'sender' ||
-        key.toLowerCase() === 'recipient') &&
-      EMAIL_PATTERN.test(stringValue)
-    ) {
+    if (EMAIL_PATTERN.test(stringValue)) {
       return this.maskEmail(stringValue);
     }
 
@@ -276,7 +280,8 @@ export class AuditLogRedactionService {
   }
 
   /**
-   * Mask an email address, preserving partial structure for debugging.
+   * Mask an email address, preserving only a coarse shape for debugging
+   * while ensuring the local part and domain are not recoverable.
    */
   maskEmail(email: string): string {
     const atIndex = email.indexOf('@');
@@ -285,27 +290,26 @@ export class AuditLogRedactionService {
     }
 
     const localPart = email.substring(0, atIndex);
-    const domain = email.substring(atIndex);
 
     if (localPart.length <= 2) {
-      return `*${domain}`;
+      return `*${MASKED_EMAIL_DOMAIN}`;
     }
 
-    return `${localPart.substring(0, 2)}***${domain}`;
+    return `${localPart.substring(0, 2)}***${MASKED_EMAIL_DOMAIN}`;
   }
 
   maskJwt(token: string): string {
     const parts = token.split('.');
     if (parts.length === 3) {
-      return `xxx.${parts.slice(0, 2).join('.')}.xxx`;
+      return `xxx.${parts[0]}.xxx`;
     }
     return REDACTED_VALUE;
   }
 
   maskLongHex(hex: string): string {
     if (hex.length <= 8) {
-      return hex;
+      return REDACTED_VALUE;
     }
-    return `${hex.substring(0, 4)}...${hex.substring(hex.length - 4)}`;
+    return REDACTED_VALUE;
   }
 }

@@ -38,12 +38,13 @@ import { FeatureFlagsModule } from './feature-flags/feature-flags.module';
 import { BookmarkModule } from './bookmark/bookmark.module';
 import { KeyRotationModule } from './key-rotation/key-rotation.module';
 import { AnalyticsModule } from './analytics/analytics.module';
-// âœ… Canonical queue stack: @nestjs/bullmq (BullMQ v4 + ioredis)
+// ➡ Canonical queue stack: @nestjs/bullmq (BullMQ v4 + ioredis)
 // The legacy @nestjs/bull import has been removed. All queues use BullMQ.
 import { BullModule } from '@nestjs/bullmq';
 import { StructuredLoggingInterceptor } from './common/logging/structured-logging.interceptor';
 import { PerformanceInterceptor } from './common/interceptors/performance.interceptor';
 import { HttpCacheInterceptor } from './common/interceptors/http-cache.interceptor';
+import { RedactionModule } from './cesson/redaction.module';
 
 @Module({
   imports: [
@@ -76,7 +77,7 @@ import { HttpCacheInterceptor } from './common/interceptors/http-cache.intercept
      *
      * A single ioredis connection object is shared across all queues via
      * BullModule.forRootAsync().  Individual queue modules call
-     * BullModule.registerQueue({ name: '...' }) â€” they do NOT pass their own
+     * BullModule.registerQueue({ name: '...' }) — they do NOT pass their own
      * connection.
      *
      * Retry semantics (defaultJobOptions) are set here so every queue inherits
@@ -101,7 +102,7 @@ import { HttpCacheInterceptor } from './common/interceptors/http-cache.intercept
           }
         } else {
           new Logger('Bootstrap').warn(
-            'ENABLE_BACKGROUND_JOBS is not "true" â€” BullMQ workers are disabled. ' +
+            'ENABLE_BACKGROUND_JOBS is not "true" — BullMQ workers are disabled. ' +
               'Queue producers will silently skip enqueue calls. Redis connectivity is not required.',
           );
         }
@@ -115,7 +116,7 @@ import { HttpCacheInterceptor } from './common/interceptors/http-cache.intercept
             attempts: 3,
             backoff: {
               type: 'exponential',
-              delay: 5_000, // 5 s â†’ 10 s â†’ 20 s
+              delay: 5_000, // 5 s → 10 s → 20 s
             },
             removeOnComplete: { count: 100 },
             removeOnFail: { count: 500 },
@@ -130,6 +131,7 @@ import { HttpCacheInterceptor } from './common/interceptors/http-cache.intercept
     }),
     EventEmitterModule.forRoot(),
     ScheduleModule.forRoot(),
+    RedactionModule,
     HealthModule,
     AnalyticsModule,
     UserModule,
