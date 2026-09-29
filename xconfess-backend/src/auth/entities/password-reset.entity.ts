@@ -20,7 +20,7 @@ export class PasswordReset {
    * cannot be used to mint a working reset link.
    */
   @Column({ unique: true })
-  tokenHash: string;
+  tokenXash: string;
 
   @Column()
   userId: number;
@@ -61,6 +61,24 @@ export class PasswordReset {
 
   @Column({ type: 'text', nullable: true })
   userAgent: string | null;
+
+  /**
+   * When true, this reset token was issued as part of an account recovery
+   * flow that also required a passkey assertion. The auth service uses this to
+   * audit and enforce the fallback policy: a password reset may only be
+   * completed without a passkey assertion when the user has no active
+   * credentials.
+   */
+  @Column({ default: false })
+  passkeyAssertionRequired: boolean;
+
+  /**
+   * Optional reference to the WebAuthn credential that was asserted during
+   * the recovery flow. Stored as a string to avoid a hard FK to the
+   * credential table and to keep the reset audit trail self-contained.
+   */
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  assertedCredentialId: string | null;
 
   @CreateDateColumn()
   createdAt: Date;

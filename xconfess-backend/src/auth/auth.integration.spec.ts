@@ -20,16 +20,18 @@ import { CryptoUtil } from '../common/crypto.util';
 import { ConfigService } from '@nestjs/config';
 import { LockoutService } from './lockout.service';
 import { StepUpService } from './step-up.service';
+import { WebAuthnService } from './webauthn.service';
+import { WebAuthCredential } from './entities/webauth-credential.entity';
 import * as crypto from 'crypto';
 import { AUTH_ERROR_CODES, AUTH_MESSAGES } from './auth.contract';
 
 const hashToken = (token: string) =>
-  crypto.createHash('sha256').update(token).digest('hex');
+	crypto.createHash('sha256').update(token).digest('hex');
 
 // Mock bcrypt module
 jest.mock('bcryptjs', () => ({
-  hash: jest.fn(),
-  compare: jest.fn(),
+	hash: jest.fn(),
+	compare: jest.fn(),
 }));
 
 describe('Auth Integration Tests - Forgot Password Flow', () => {
