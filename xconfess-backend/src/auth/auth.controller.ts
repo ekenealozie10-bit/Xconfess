@@ -10,6 +10,7 @@ import {
   UseGuards,
   UnauthorizedException,
   HttpException,
+  Res,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import {
@@ -19,7 +20,7 @@ import {
   ApiResponse,
   ApiBearerAuth,
 } from '@nestjs/swagger';
-import { Request } from 'express';
+import { Request, Response } from 'express';
 import * as speakeasy from 'speakeasy';
 import * as QRCode from 'qrcode';
 import { AuthService } from './auth.service';
@@ -32,6 +33,7 @@ import { JwtAuthGuard } from './jwt-auth.guard';
 import { GetUser } from './get-user.decorator';
 import { User } from '../user/entities/user.entity';
 import { RateLimit } from './guard/rate-limit.decorator';
+import { CSRF_COOKIE_NAME, CSRF_TOKEN_TTL_MS } from '../common/csrf/csrf.constants';
 
 @ApiTags('Auth')
 @Controller('auth')
@@ -138,6 +140,8 @@ export class AuthController {
   @ApiOperation({ summary: 'Verify TOTP token during login (after password).' })
   async login2fa(
     @Body() body: { userId: number; token?: string; recoveryCode?: string },
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
   ): Promise<{ access_token?: string; user?: any; anonymousUserId?: string }> {
     const { userId, token, recoveryCode } = body as any;
     if (!userId) throw new BadRequestException('Missing userId');
@@ -163,6 +167,7 @@ export class AuthController {
 
       const tokenStr = (this as any).authService.jwtService.sign(payload);
       const anonymousUser = await (this as any).authService.anonymousUserService.getOrCreateForUserSession(user.id);
+      this.setSessionCookie(req, res, tokenStr);
       return { access_token: tokenStr, user, anonymousUserId: anonymousUser.id };
     }
 
@@ -193,6 +198,7 @@ export class AuthController {
     const tokenStr = (this as any).authService.jwtService.sign(payload);
     const anonymousUser = await (this as any).authService.anonymousUserService.getOrCreateForUserSession(user.id);
 
+    this.setSessionCookie(req, res, tokenStr);
     return { access_token: tokenStr, user, anonymousUserId: anonymousUser.id };
   }
 
@@ -222,6 +228,8 @@ export class AuthController {
   @ApiResponse({ status: 429, description: 'Too many login attempts.' })
   async login(
     @Body() loginDto: LoginDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
   ): Promise<any> {
     try {
       const validated = await this.authService.validateUser(
@@ -241,6 +249,9 @@ export class AuthController {
       const result = await this.authService.login(loginDto.email, loginDto.password);
       if (!result) {
         throw new UnauthorizedException('Invalid credentials');
+      }
+      if (result.access_token) {
+        this.setSessionCookie(req, res, result.access_token);
       }
       return result;
     } catch (error) {
@@ -311,7 +322,8 @@ export class AuthController {
     description: 'Logout acknowledged.',
     schema: { example: { message: 'Logged out successfully' } },
   })
-  async logout(): Promise<{ message: string }> {
+  async logout(@Res({ passthrough: true }) res: Response): Promise<{ message: string }> {
+    res.clearCookie('access_token', { path: '/' });
     return { message: 'Logged out successfully' };
   }
 
@@ -378,11 +390,31 @@ export class AuthController {
       if (error instanceof BadRequestException) {
         throw error;
       }
-      const errorMessage =
-        error instanceof Error ? error.message : 'Unknown error';
-      throw new BadRequestException(
-        'Failed to reset password: ' + errorMessage,
-      );
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      throw new BadRequestException('Password reset failed: ' + errorMessage);
+    }
+  }
+
+  private setSessionCookie(req: Request, res: Response, token: string): void {
+    const isProduction = process.env.NODE_ENV === 'production';
+    res.cookie('access_token', token, {
+      httpOnly: true,
+      sameSite: 'in',
+      secure: isProduction,
+      path: '/',
+      maxAge: 86400,
+    });
+    // Rotate the CSRF token on every session change so a pre-auth token cannot
+    // be replayed against a freshly authenticated session.
+    const csrfToken = (req as any).csrfToken as string | undefined;
+    if (csrfToken) {
+      res.cookie(CSRF_COOKIE_NAME, csrfToken, {
+        httpOnly: false,
+        sameSite: 'lax',
+        secure: isProduction,
+        path: '/',
+        maxAge: CSRF_TOKEN_TTL / 1000,
+      });
     }
   }
 }

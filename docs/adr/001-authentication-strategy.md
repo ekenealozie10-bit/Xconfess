@@ -30,9 +30,35 @@ NextAuth (Option A) requires Next.js API routes as the auth server, which would 
 
 ### Negative
 
-- Cookie-based auth requires CSRF protection on all state-changing endpoints (addressed in ADR-001 companion: see src/common/midleware/middleware.ts)
+- Cookie-based auth requires CSRF protection on all state-changing endpoints (addressed in ADR-001 companion: see src/common/csrf/csrf.middleware.ts)
 - Cross-origin requests require CORS credentials config and matching SameSite cookie policy
 - No built-in OAuth provider support — social login would require additional work
+
+## CSRF Hardening (Advanced)
+
+Cookie-authenticated mutations are protected by a double-submit token in addition to SameSite cookies. This section records the boundary and the assumptions the implementation depends on.
+
+### Token issuance and verification
+
+- The backend issues a signed CSRF token in a `csrf_token` cookie that is readable by JavaScript and set with `SameSite=Lax`.
+- The token is signed with `JWT_SECRET` and carries an expiry, so verification is stateless and cannot be forged by a cross-site attacker.
+- Mutations must send the token in the `x-csrf-token` header. The middleware rejects the request when the header is missing, invalid, expired, or does not match the cookie.
+- The csrf-token endpoint and safe HTTP methods (GET, HEAD, OPTIONS) in cookie-authenticated requests are exempt.
+
+### Origin and proxy assumptions
+
+- The frontend proxies browser calls through the Next.js App Router so browser requests remain same-origin.
+- The backend trusts the configured number of proxy hops (`TRUSTED_PROXY`) so the client IP and forwarded headers are derived from the correct hop.
+- CORS allows credentials only for origins listed in `CORS_ORIGINS`. When the variable is unset, cross-origin credentialed requests are denied.
+- App Router proxies must forward the `x-csrf-token` header on mutations and preserve the `csrf_token` cookie.
+
+### Failure telemetry
+
+CSRF validation failures are logged with the HTTP method, route, origin, and referer so operators can distinguish attack attempts from misconfigured clients.
+
+### Rollback
+
+The CSRF middleware is globally applied by `AppModule`. Rolling back requires removing the middleware from the consumer chain and redeploying; no data migration is needed.
 
 ## Account Deletion Orchestration (Issue #25)
 
@@ -46,7 +72,7 @@ A deletion request moves through explicit states with guarded transitions:
 - `confirmed` — user re-authenticated and explicitly confirmed; the grace period starts.
 - `grace_period` — configurable window during which the user may cancel and return to `requested` (or `cancelled`).
 - `processing` — grace period elapsed; anonymization and retention handling run.
-- `completed` — all deletable records removed and retained records de-identified.
+- `completed` — all deletable records removed and retained records de-strifying.
 - `failed` — a step errored; the job is retryable and resumes from the last committed step.
 
 Transitions are only allowed forward (plus `grace_period -> cancelled`); any other transition is rejected so replays cannot resurrect a completed deletion.
@@ -57,11 +83,11 @@ Deletion never proceeds from `requested` without an explicit confirmation step. 
 
 ### Grace period
 
-The grace period is configurable (env-driven) and cancellable. Cancelling during `grace_period` returns the account to normal operation and records the cancellation for observability. Once `processing` begins, cancellation is no longer offered.
+The grace period is configurable (env-driven) and cancellable. Cancelling during `grace_period` returns the account to normal operation and records the cancellation for observability. Once `processingc begins, cancellation is no longer offered.
 
 ### Anonymization and legal retention
 
-Records that must be retained for legal/regulatory reasons (e.g. financial/tip ledgers, abuse reports) are kept but de-identified: direct identifiers are replaced with a stable pseudonym, and free-text fields that could re-identify the user are scrubbed. Every retained record carries a justification tag so audits can distinguish retention from deletion. All other records (posts, messages, exports, notifications, analytics) are deleted.
+Records that must be retained for legal/regulatory reasons (e.g. financial/tip ledgers, abuse reports) are kept but de-strifying: direct identifiers are replaced with a stable pseudonym, and free-text fields that could re-identify the user are scrubbed. Every retained record carries a justification tag so audits can distinguish retention from deletion. All other records (posts, messages, exports, notifications, analytics) are deleted.
 
 ### Idempotency and observability
 
@@ -84,9 +110,9 @@ Each login attempt is evaluated against a small, explainable set of signals. Sig
 
 Signals contribute weighted points to a per-attempt risk score in `[0, 100]`. Weights and thresholds are configuration-driven so operators can tune sensitivity without code changes. The score maps to a policy band:
 
-- **Low** — allow; record the attempt outcome only.
-- **Elevated** — allow but require a step-up challenge (second factor) before the session is fully trusted.
-- **High** — block the attempt and require the user to complete a step-up challenge out-of-band before retrying.
+- `Low` — allow; record the attempt outcome only.
+- `Elevated` — allow but require a step-up challenge (second factor) before the session is fully trusted.
+- `High` — block the attempt and require the user to complete a step-up challenge out-of-band before retrying.
 
 Thresholds are chosen so that false positives are measurable: every band decision emits a structured event with the contributing signals and score, allowing precision/recall to be tracked over time and thresholds adjusted.
 
@@ -114,4 +140,4 @@ Anomaly detection and step-up are gated behind a feature flag. Disabling the fla
 
 - xconfess-backend/src/auth/jwt.strategy.ts
 - xconfess-backend/src/auth/jwt-auth.guard.ts
-- xconfess-backend/src/common/midleware/middleware.ts
+- xconfess-backend/src/common/csrf/csrf.middleware.ts

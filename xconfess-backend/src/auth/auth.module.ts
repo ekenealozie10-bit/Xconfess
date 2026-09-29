@@ -12,6 +12,7 @@ import { OptionalJwtAuthGuard } from './optional-jwt-auth.guard';
 import { PasswordResetService } from './password-reset.service';
 import { StepUpService } from './step-up.service';
 import { StepUpGuard } from './guards/step-up.guard';
+import { CsrfModule } from '../csrf/csrf.module';
 import { UserModule } from '../user/user.module';
 import { EmailModule } from '../email/email.module';
 import { PasswordReset } from './entities/password-reset.entity';
@@ -22,6 +23,7 @@ import { PasswordReset } from './entities/password-reset.entity';
     CacheModule,
     EmailModule,
     PassportModule,
+    CsrfModule,
     TypeOrmModule.forFeature([PasswordReset]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
